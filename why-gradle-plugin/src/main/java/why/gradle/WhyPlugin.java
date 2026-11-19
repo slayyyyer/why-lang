@@ -1,9 +1,12 @@
 package why.gradle;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Properties;
 
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
@@ -16,8 +19,31 @@ import org.gradle.language.jvm.tasks.ProcessResources;
 
 /** Packages {@code src/why} into the jar and adds {@code whyCheck} and {@code whyRun}. */
 public final class WhyPlugin implements Plugin<Project> {
-    private static final String RUNTIME = "io.github.slayyyyer:why-lang:0.1.0";
+    private static final String GROUP = "io.github.slayyyyer";
+    private static final String ARTIFACT = "why-lang";
     private static final String SITE_ROOT = "META-INF/why-site";
+
+    /** The runtime coordinate, derived from the build's version so a release cannot drift. */
+    static String runtimeCoordinate() {
+        return GROUP + ":" + ARTIFACT + ":" + version();
+    }
+
+    private static String version() {
+        try (InputStream in = WhyPlugin.class.getResourceAsStream("/why-version.properties")) {
+            if (in != null) {
+                Properties properties = new Properties();
+                properties.load(in);
+                String version = properties.getProperty("version");
+                if (version != null && !version.isBlank()) return version.strip();
+            }
+        } catch (IOException ignored) {
+            // Fall through to the jar manifest, then fail loudly below.
+        }
+        String fromManifest = WhyPlugin.class.getPackage().getImplementationVersion();
+        if (fromManifest != null && !fromManifest.isBlank()) return fromManifest;
+        throw new IllegalStateException(
+                "why-version.properties is missing; the plugin jar was built without its version");
+    }
 
     /** Development databases are not site content and must never be put in a published jar. */
     static boolean isDatabaseFile(Path file) {
@@ -38,7 +64,7 @@ public final class WhyPlugin implements Plugin<Project> {
         extension.getSecureCookies().convention(false);
 
         // Java code in the project can call Site.fromClasspath() and embed WhyServer.
-        project.getDependencies().add("api", RUNTIME);
+        project.getDependencies().add("api", runtimeCoordinate());
 
         SourceSet main = project.getExtensions().getByType(SourceSetContainer.class)
                 .getByName(SourceSet.MAIN_SOURCE_SET_NAME);
@@ -65,7 +91,7 @@ public final class WhyPlugin implements Plugin<Project> {
             configuration.setCanBeConsumed(false);
             configuration.setCanBeResolved(true);
         });
-        project.getDependencies().add(whyRuntime.getName(), RUNTIME);
+        project.getDependencies().add(whyRuntime.getName(), runtimeCoordinate());
 
         TaskProvider<JavaExec> check = project.getTasks().register("whyCheck", JavaExec.class, task -> {
             task.setGroup("verification");

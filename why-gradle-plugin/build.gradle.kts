@@ -1,13 +1,15 @@
 import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.plugins.signing.Sign
 
 plugins {
     `java-gradle-plugin`
     `maven-publish`
     signing
+    id("com.gradle.plugin-publish") version "1.3.0"
 }
 
 group = "io.github.slayyyyer"
-version = "0.1.0"
+version = rootProject.version
 
 repositories {
     mavenLocal()
@@ -27,7 +29,23 @@ java {
     withJavadocJar()
 }
 
+// The plugin resolves the runtime at execution time, so it needs the version as a resource.
+val whyVersionDir = layout.buildDirectory.dir("generated/why-version")
+val writeWhyVersion = tasks.register("writeWhyVersion") {
+    val current = project.version.toString()
+    inputs.property("version", current)
+    outputs.dir(whyVersionDir)
+    doLast {
+        val file = whyVersionDir.get().file("why-version.properties").asFile
+        file.parentFile.mkdirs()
+        file.writeText("version=$current\n")
+    }
+}
+the<SourceSetContainer>()[SourceSet.MAIN_SOURCE_SET_NAME].resources.srcDir(writeWhyVersion)
+
 gradlePlugin {
+    website = "https://slayyyyer.github.io/why-lang/"
+    vcsUrl = "https://github.com/slayyyyer/why-lang"
     plugins {
         create("why") {
             id = "io.github.slayyyyer.why"
@@ -85,10 +103,18 @@ signing {
     }
 }
 
+// plugin-publish signs every publication when the signing plugin is present. Without a key there
+// is nothing to sign, and the local test repository stays unsigned.
+tasks.withType<Sign>().configureEach {
+    onlyIf { signingKey.isPresent }
+}
+
 tasks.test {
     useJUnitPlatform()
+    dependsOn(":checkVersion")
     dependsOn(":publishAllPublicationsToTestRepository")
     dependsOn("publishAllPublicationsToTestRepository")
     systemProperty("why.test.repo", rootProject.layout.buildDirectory.dir("test-repo").get().asFile.absolutePath)
+    systemProperty("why.test.version", project.version.toString())
     systemProperty("why.test.gradleHome", gradle.gradleHomeDir?.absolutePath ?: "")
 }

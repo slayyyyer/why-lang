@@ -29,7 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class WhyConsumerTest {
-    private static final String VERSION = "0.1.0";
+    private static final String VERSION = requiredProperty("why.test.version");
 
     @TempDir
     Path project;

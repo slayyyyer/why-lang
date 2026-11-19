@@ -50,6 +50,21 @@ artifacts themselves:
 curl -fI https://repo1.maven.org/maven2/io/github/slayyyyer/why-lang/0.1.0/why-lang-0.1.0.pom
 ```
 
+## Publishing the plugin to the Gradle Plugin Portal
+
+The plugin also publishes to the Portal, which is what lets `plugins { id("io.github.slayyyyer.why") }`
+resolve without a `pluginManagement` block. The build carries `com.gradle.plugin-publish`; the
+credentials are a Portal token, not the Central one:
+
+```bash
+export GRADLE_PUBLISH_KEY='...'
+export GRADLE_PUBLISH_SECRET='...'
+./gradlew --no-daemon publishPlugins
+```
+
+Run it after the Central artifacts are live, because the plugin's POM points at
+`io.github.slayyyyer:why-lang` on Maven Central.
+
 ## Skipping the prompts
 
 Every prompt reads an environment variable first:

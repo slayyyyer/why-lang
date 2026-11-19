@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "io.github.slayyyyer"
-version = "0.1.0"
+version = providers.gradleProperty("whyVersion").get()
 
 java {
     toolchain {
@@ -32,6 +32,38 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
 }
+
+/**
+ * The version lives in gradle.properties. Maven cannot read it and the plugin needs it at runtime,
+ * so fail the build as soon as either copy drifts.
+ */
+val checkVersion by tasks.registering {
+    group = "verification"
+    description = "Checks that pom.xml and the plugin agree with gradle.properties."
+    val expected = version.toString()
+    val pomFile = layout.projectDirectory.file("pom.xml")
+    val pluginSource = layout.projectDirectory.file(
+        "why-gradle-plugin/src/main/java/why/gradle/WhyPlugin.java")
+    inputs.file(pomFile)
+    inputs.file(pluginSource)
+    inputs.property("version", expected)
+    doLast {
+        val pom = pomFile.asFile.readText()
+        val declared = Regex("""<artifactId>why-lang</artifactId>\s*<version>([^<]+)</version>""")
+            .find(pom)?.groupValues?.get(1)
+            ?: throw GradleException("pom.xml does not declare a why-lang version")
+        if (declared != expected) {
+            throw GradleException("pom.xml says $declared but gradle.properties says $expected")
+        }
+        val hardcoded = Regex("""io\.github\.slayyyyer:why-lang:\d""")
+        if (hardcoded.containsMatchIn(pluginSource.asFile.readText())) {
+            throw GradleException(
+                "WhyPlugin.java hardcodes a runtime version; read it from why-version.properties")
+        }
+    }
+}
+
+tasks.named("check") { dependsOn(checkVersion) }
 
 val signingKey = providers.gradleProperty("signingKey")
     .orElse(providers.environmentVariable("SIGNING_KEY"))
