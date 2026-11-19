@@ -14,9 +14,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
 import why.lang.Db;
+import why.lang.Flash;
 import why.lang.Redirect;
 import why.util.Html;
 
@@ -25,6 +28,8 @@ public final class WhyServer {
     private final Site site;
     private final PageCompiler compiler;
     private final HttpServer server;
+    /** Pending one-shot flashes, keyed by the why_session cookie value. */
+    private final Map<String, Map<String, Object>> flashes = new ConcurrentHashMap<>();
 
     public WhyServer(Site site, int port) throws IOException {
         this.site = site;
@@ -88,25 +93,60 @@ public final class WhyServer {
 
     private int servePage(HttpExchange exchange, Path file) throws IOException {
         String display = site.relative(file);
+        String sessionId = sessionId(exchange);
+        Map<String, Object> carried = sessionId == null ? Map.of() : flashes.remove(sessionId);
+        Flash flash = new Flash(carried == null ? Map.of() : carried);
         String html;
         try {
             Program program = compiler.compile(file);
-            Map<String, Object> globals = globals(exchange);
+            Map<String, Object> globals = globals(exchange, flash);
             try (Db db = new Db(site.dbFile())) {
                 globals.put("db", db);
                 html = program.render(globals);
             }
         } catch (Redirect redirect) {
+            persistFlash(exchange, sessionId, flash);
             sendRedirect(exchange, redirect.location());
             return 303;
         } catch (WhyError e) {
+            persistFlash(exchange, sessionId, flash);
             WhyError located = e.locate(display, e.line());
             System.err.println("why: " + located);
             sendHtml(exchange, 500, whyErrorPage(located));
             return 500;
         }
+        persistFlash(exchange, sessionId, flash);
         sendHtml(exchange, 200, html);
         return 200;
+    }
+
+    /** The validated why_session cookie value, or null when there is none. */
+    private static String sessionId(HttpExchange exchange) {
+        List<String> headers = exchange.getRequestHeaders().get("Cookie");
+        if (headers == null) return null;
+        for (String header : headers) {
+            for (String part : header.split(";")) {
+                int equals = part.indexOf('=');
+                if (equals < 0) continue;
+                if (!part.substring(0, equals).strip().equals("why_session")) continue;
+                String id = part.substring(equals + 1).strip();
+                if (id.matches("[A-Za-z0-9-]{1,64}")) return id;
+            }
+        }
+        return null;
+    }
+
+    /** Stores messages set this request; a visitor without a session gets a cookie. */
+    private void persistFlash(HttpExchange exchange, String sessionId, Flash flash) {
+        Map<String, Object> pending = flash.pending();
+        if (pending.isEmpty()) return;
+        String id = sessionId;
+        if (id == null) {
+            id = UUID.randomUUID().toString();
+            exchange.getResponseHeaders().add("Set-Cookie",
+                    "why_session=" + id + "; Path=/; HttpOnly; SameSite=Lax");
+        }
+        flashes.put(id, pending);
     }
 
     private int serveStatic(HttpExchange exchange, Path file) throws IOException {
@@ -115,7 +155,7 @@ public final class WhyServer {
         return 200;
     }
 
-    private Map<String, Object> globals(HttpExchange exchange) {
+    private Map<String, Object> globals(HttpExchange exchange, Flash flash) {
         Map<Object, Object> params = new LinkedHashMap<>();
         String rawQuery = exchange.getRequestURI().getRawQuery();
         if (rawQuery != null && !rawQuery.isEmpty()) parseUrlEncoded(rawQuery, params);
@@ -133,6 +173,7 @@ public final class WhyServer {
         globals.put("request", request);
         globals.put("params", params);
         globals.put("form", form);
+        globals.put("flash", flash);
         return globals;
     }
 

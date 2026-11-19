@@ -8,19 +8,19 @@ if request.method == "POST"
   message = form.message.strip
   if name != "" and message != ""
     db.exec("insert into guestbook (name, message, created_at) values (?, ?, datetime('now'))", name, message)
-    redirect("/guestbook?posted=1")
+    flash.set("notice", "Thanks — your note is in the book.")
+    redirect("/guestbook")
   end
 end
 
 entries = db.query("select * from guestbook order by id desc limit 50")
 count = entries.length
-posted = params.posted == "1"
 title = "Guestbook"
 
 view:
 {{> header}}
 <h1>Guestbook</h1>
-{{#if posted}}<p class="note">Thanks — your note is in the book.</p>{{/if}}
+{{#if flash.notice}}<p class="note">{{flash.notice}}</p>{{/if}}
 <form class="sign" method="post" action="/guestbook">
   <label>Name
     <input name="name" maxlength="60" required>

@@ -24,6 +24,8 @@ a POST form, a bound `db.exec` insert, and a redirect back. Written while buildi
 3. **PRG needs a success channel, and there is no flash or session.**
    The thank-you is `/guestbook?posted=1`: visible, bookmarkable, spoofable, and gone on a clean
    refresh. A one-shot message would need state the page model does not have.
+   *(Addressed after M2: `flash.set` plus an in-memory `why_session` cookie now carries the notice
+   across the redirect, and the flag is gone.)*
 
 4. **Validation has nowhere to live.**
    Empty fields simply fall through: no insert, no redirect, no message. Re-rendering with the

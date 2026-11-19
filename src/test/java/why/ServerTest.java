@@ -1,6 +1,7 @@
 package why;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -69,6 +70,14 @@ class ServerTest {
 
     private HttpResponse<String> get(String path) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + path)).GET().build();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> get(String path, String session) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + path))
+                .header("Cookie", "why_session=" + session)
+                .GET()
+                .build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
@@ -185,6 +194,39 @@ class ServerTest {
         assertEquals(404, get("/_snippet.why").statusCode());
         assertEquals(404, get("/_secret.css").statusCode());
         assertEquals("<span>snippet</span>\n\n", get("/uses").body());
+    }
+
+    @Test
+    void flashIsCarriedAcrossOneRedirect() throws Exception {
+        write("notice.why", """
+                controller:
+                if request.method == "POST"
+                  flash.set("notice", "saved")
+                  redirect("/notice")
+                end
+
+                view:
+                {{#if flash.notice}}<p>{{flash.notice}}</p>{{/if}}seen
+                """);
+
+        HttpResponse<String> posted = post("/notice", "");
+        assertEquals(303, posted.statusCode());
+        assertEquals("/notice", posted.headers().firstValue("location").orElse(""));
+
+        String setCookie = posted.headers().firstValue("set-cookie").orElse("");
+        assertTrue(setCookie.startsWith("why_session="));
+        int semicolon = setCookie.indexOf(';');
+        assertTrue(semicolon > "why_session=".length());
+        String session = setCookie.substring("why_session=".length(), semicolon);
+
+        HttpResponse<String> first = get("/notice", session);
+        assertEquals(200, first.statusCode());
+        assertTrue(first.body().contains("<p>saved</p>"));
+
+        HttpResponse<String> second = get("/notice", session);
+        assertEquals(200, second.statusCode());
+        assertTrue(second.body().contains("seen"));
+        assertFalse(second.body().contains("<p>saved</p>"));
     }
 
     @Test

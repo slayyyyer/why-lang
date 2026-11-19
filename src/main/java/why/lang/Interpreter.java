@@ -200,6 +200,17 @@ public final class Interpreter {
         if (receiver == null) throw new WhyError("nil has no method '" + name + "'", null, line);
         Object first = args.isEmpty() ? null : args.get(0);
 
+        if (receiver instanceof Flash flash) {
+            return switch (name) {
+                case "set" -> {
+                    flash.set(Value.str(first), args.size() > 1 ? args.get(1) : null);
+                    yield null;
+                }
+                case "get" -> flash.get(Value.str(first));
+                default -> throw new WhyError("flash has no method '" + name + "' (try set or get)", null, line);
+            };
+        }
+
         if (receiver instanceof Db db) {
             if (!(first instanceof String sql)) {
                 throw new WhyError("db." + name + " needs a SQL string", null, line);
@@ -331,6 +342,7 @@ public final class Interpreter {
     /** {@code a.b} without parentheses: a hash key first, then a zero-argument method. */
     private Object property(Object target, String name, int line) {
         if (target == null) return null;
+        if (target instanceof Flash flash) return flash.get(name);
         if (target instanceof Map<?, ?> map) {
             if (map.containsKey(name)) return map.get(name);
             return switch (name) {
