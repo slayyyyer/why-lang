@@ -16,7 +16,7 @@ import org.gradle.language.jvm.tasks.ProcessResources;
 
 /** Packages {@code src/why} into the jar and adds {@code whyCheck} and {@code whyRun}. */
 public final class WhyPlugin implements Plugin<Project> {
-    private static final String RUNTIME = "why:why-lang:0.1.0";
+    private static final String RUNTIME = "io.github.slayyyyer:why-lang:0.1.0";
     private static final String SITE_ROOT = "META-INF/why-site";
 
     /** Development databases are not site content and must never be put in a published jar. */

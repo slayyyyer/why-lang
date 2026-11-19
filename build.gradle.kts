@@ -1,15 +1,20 @@
+import org.gradle.api.publish.maven.MavenPublication
+
 plugins {
     `java-library`
     `maven-publish`
+    signing
 }
 
-group = "why"
+group = "io.github.slayyyyer"
 version = "0.1.0"
 
 java {
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(21))
     }
+    withSourcesJar()
+    withJavadocJar()
 }
 
 repositories {
@@ -28,10 +33,52 @@ tasks.test {
     useJUnitPlatform()
 }
 
+val signingKey = providers.gradleProperty("signingKey")
+    .orElse(providers.environmentVariable("SIGNING_KEY"))
+val signingPassword = providers.gradleProperty("signingPassword")
+    .orElse(providers.environmentVariable("SIGNING_PASSWORD"))
+
 publishing {
     publications {
         create<MavenPublication>("mavenJava") {
             from(components["java"])
+            pom {
+                name.set("why-lang")
+                description.set("A small, Ruby-flavored page language for the JVM.")
+                url.set("https://slayyyyer.github.io/why-lang/")
+                licenses {
+                    license {
+                        name.set("MIT License")
+                        url.set("https://opensource.org/licenses/MIT")
+                    }
+                }
+                developers {
+                    developer {
+                        id.set("slayyyyer")
+                        name.set("slayyyyer")
+                        email.set("slayyyyer@users.noreply.github.com")
+                        url.set("https://github.com/slayyyyer")
+                    }
+                }
+                scm {
+                    connection.set("scm:git:https://github.com/slayyyyer/why-lang.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/slayyyyer/why-lang.git")
+                    url.set("https://github.com/slayyyyer/why-lang")
+                }
+            }
         }
+    }
+    repositories {
+        maven {
+            name = "test"
+            url = layout.buildDirectory.dir("test-repo").get().asFile.toURI()
+        }
+    }
+}
+
+signing {
+    if (signingKey.isPresent) {
+        useInMemoryPgpKeys(signingKey.get(), signingPassword.orNull)
+        sign(publishing.publications)
     }
 }

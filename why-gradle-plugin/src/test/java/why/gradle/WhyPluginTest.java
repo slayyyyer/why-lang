@@ -26,7 +26,7 @@ class WhyPluginTest {
     @Test
     void packagesTheSiteIntoTheJarAndRegistersTasks() throws IOException {
         write("settings.gradle.kts", "rootProject.name = \"demo\"\n");
-        write("build.gradle.kts", "plugins { id(\"why\") }\n\nversion = \"1.0\"\n");
+        write("build.gradle.kts", "plugins { id(\"io.github.slayyyyer.why\") }\n\nversion = \"1.0\"\n");
         write("src/why/index.why", "view:\n<p>packaged</p>\n");
         write("src/why/assets/style.css", "body{}\n");
         write("src/why/data.db", "local database contents\n");

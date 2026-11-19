@@ -4,11 +4,32 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>why</groupId>
+  <groupId>io.github.slayyyyer</groupId>
   <artifactId>why-lang</artifactId>
   <version>0.1.0</version>
   <packaging>jar</packaging>
-  <name>why</name>
+  <name>why-lang</name>
+  <description>A small, Ruby-flavored page language for the JVM.</description>
+  <url>https://slayyyyer.github.io/why-lang/</url>
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>slayyyyer</id>
+      <name>slayyyyer</name>
+      <email>slayyyyer@users.noreply.github.com</email>
+      <url>https://github.com/slayyyyer</url>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:https://github.com/slayyyyer/why-lang.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/slayyyyer/why-lang.git</developerConnection>
+    <url>https://github.com/slayyyyer/why-lang</url>
+  </scm>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
