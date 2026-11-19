@@ -2,6 +2,7 @@ package why;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -48,6 +49,34 @@ class DbTest {
 
             assertFalse(request.isAlive(), "SQLite kept running after the request was interrupted");
             assertInstanceOf(RequestTimeout.class, outcome.get());
+        }
+    }
+
+    @Test
+    @Timeout(20)
+    void aSecondWriterWaitsForTheFirstInsteadOfFailing() throws Exception {
+        Path file = dir.resolve("busy.db");
+        try (Db first = new Db(file); Db second = new Db(file)) {
+            first.exec("create table t (id integer)", List.of());
+            first.exec("begin immediate", List.of());
+            first.exec("insert into t values (1)", List.of());
+
+            AtomicReference<Throwable> outcome = new AtomicReference<>();
+            Thread writer = Thread.ofVirtual().start(() -> {
+                try {
+                    second.exec("insert into t values (2)", List.of());
+                } catch (Throwable e) {
+                    outcome.set(e);
+                }
+            });
+
+            Thread.sleep(300);
+            assertTrue(writer.isAlive(), "the second writer did not wait for the write lock");
+            first.exec("commit", List.of());
+            writer.join(TimeUnit.SECONDS.toMillis(10));
+
+            assertFalse(writer.isAlive(), "the second writer never completed");
+            assertNull(outcome.get(), () -> "the second writer failed: " + outcome.get());
         }
     }
 

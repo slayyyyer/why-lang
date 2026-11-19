@@ -177,3 +177,5 @@ ul.guestbook li:last-child {
 ul.guestbook p {
   margin: 0 0 0.35rem;
 }
+
+p.error{color:#a00;margin:.25rem 0}

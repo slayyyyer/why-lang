@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -15,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.GZIPInputStream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
@@ -51,6 +53,7 @@ class ServerTest {
         write("plain.why", "<h1>plain</h1>\n");
         write("broken.why", "controller:\nif\nend\n\nview:\nnever\n");
         write("style.css", "body{color:red}\n");
+        write("token.why", "view:\n{{csrf.token}}\n");
 
         try (Db db = new Db(dir.resolve("data.db"))) {
             db.exec("create table posts (id integer primary key, title text)", List.of());
@@ -84,8 +87,12 @@ class ServerTest {
         return client.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
-    private static String header(HttpResponse<String> response, String name) {
+    private static String header(HttpResponse<?> response, String name) {
         return response.headers().firstValue(name).orElse("");
+    }
+
+    private URI uri(String path) {
+        return URI.create("http://127.0.0.1:" + server.port() + path);
     }
 
     private HttpResponse<String> post(String path, String body) throws Exception {
@@ -94,6 +101,43 @@ class ServerTest {
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** Posts the way a browser would: fetch a token from a page, then submit it with the form. */
+    private HttpResponse<String> postWithToken(String path, String body) throws Exception {
+        HttpResponse<String> tokenPage = get("/token");
+        String setCookie = tokenPage.headers().firstValue("set-cookie").orElse("");
+        assertTrue(setCookie.startsWith("why_csrf="), setCookie);
+        String token = setCookie.substring("why_csrf=".length(), setCookie.indexOf(';'));
+        String payload = body.isEmpty() ? "_token=" + token : body + "&_token=" + token;
+
+        HttpRequest request = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Cookie", "why_csrf=" + token)
+                .POST(HttpRequest.BodyPublishers.ofString(payload))
+                .build();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    void formPostsWithoutATokenAreRejected() throws Exception {
+        write("sign.why", "controller:\nname = form.name\n\nview:\n{{name}}\n");
+        assertEquals(403, post("/sign", "name=why").statusCode());
+    }
+
+    @Test
+    void validateReportsMissingFields() throws Exception {
+        write("join.why", """
+                controller:
+                errors = validate(form, {name: "required", note: "min:3"})
+
+                view:
+                {{#if errors.length > 0}}bad {{errors.name}}{{else}}ok{{/if}}
+                """);
+
+        assertTrue(postWithToken("/join", "").body().contains("bad is required"),
+                postWithToken("/join", "").body());
+        assertEquals("ok\n", postWithToken("/join", "name=why&note=long").body());
     }
 
     @Test
@@ -192,6 +236,87 @@ class ServerTest {
         assertEquals("text/css; charset=utf-8", css.headers().firstValue("content-type").orElse(""));
         assertEquals("body{color:red}\n", css.body());
         assertEquals(404, get("/nope").statusCode());
+    }
+
+    @Test
+    void pagesCanSetTheStatusAndHeaders() throws Exception {
+        write("created.why", """
+                controller:
+                response.status(201)
+                response.header("X-Why", "created")
+
+                view:
+                <p>made</p>
+                """);
+
+        HttpResponse<String> response = get("/created");
+        assertEquals(201, response.statusCode());
+        assertEquals("created", header(response, "x-why"));
+        assertEquals("<p>made</p>\n", response.body());
+    }
+
+    @Test
+    void pagesCanAnswerJson() throws Exception {
+        write("data.why", """
+                controller:
+                data = {ok: true, count: 2, tags: ["a", "b"]}
+                response.json(data)
+
+                view:
+                ignored
+                """);
+
+        HttpResponse<String> response = get("/data");
+        assertEquals(200, response.statusCode());
+        assertEquals("{\"ok\":true,\"count\":2,\"tags\":[\"a\",\"b\"]}", response.body());
+        assertTrue(header(response, "content-type").startsWith("application/json"),
+                header(response, "content-type"));
+    }
+
+    @Test
+    void pagesCanServeCustomNotFoundResponses() throws Exception {
+        write("missing.why", """
+                controller:
+                response.status(404)
+
+                view:
+                <h1>gone</h1>
+                """);
+
+        assertEquals(404, get("/missing").statusCode());
+    }
+
+    @Test
+    void repeatedAssetRequestsAnswerNotModified() throws Exception {
+        HttpResponse<String> first = get("/style.css");
+        String etag = header(first, "etag");
+        assertFalse(etag.isEmpty(), "assets should carry an ETag");
+
+        HttpResponse<String> second = client.send(
+                HttpRequest.newBuilder(uri("/style.css")).header("If-None-Match", etag).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertEquals(304, second.statusCode());
+    }
+
+    @Test
+    void largeAssetsAreCompressedWhenTheClientAsks() throws Exception {
+        write("big.css", "body{color:red}\n".repeat(200));
+        HttpResponse<byte[]> response = client.send(
+                HttpRequest.newBuilder(uri("/big.css")).header("Accept-Encoding", "gzip").GET().build(),
+                HttpResponse.BodyHandlers.ofByteArray());
+
+        assertEquals("gzip", header(response, "content-encoding"));
+        try (GZIPInputStream in = new GZIPInputStream(new ByteArrayInputStream(response.body()))) {
+            assertTrue(new String(in.readAllBytes(), StandardCharsets.UTF_8).contains("body{color:red}"));
+        }
+    }
+
+    @Test
+    void healthAnswersWithoutTouchingAPage() throws Exception {
+        HttpResponse<String> response = get("/health");
+        assertEquals(200, response.statusCode());
+        assertEquals("ok", response.body());
+        assertFalse(header(response, "x-request-id").isEmpty(), "responses should carry a request id");
     }
 
     @Test
@@ -513,7 +638,7 @@ class ServerTest {
                 {{#if flash.notice}}<p>{{flash.notice}}</p>{{/if}}seen
                 """);
 
-        HttpResponse<String> posted = post("/notice", "");
+        HttpResponse<String> posted = postWithToken("/notice", "");
         assertEquals(303, posted.statusCode());
         assertEquals("/notice", posted.headers().firstValue("location").orElse(""));
 
@@ -561,7 +686,7 @@ class ServerTest {
         server = new WhyServer(new Site(dir), "127.0.0.1", 0, true, true);
         server.start();
 
-        HttpResponse<String> posted = post("/notice", "");
+        HttpResponse<String> posted = postWithToken("/notice", "");
         assertEquals(303, posted.statusCode());
         String setCookie = posted.headers().firstValue("set-cookie").orElse("");
         assertTrue(setCookie.startsWith("why_session="));
@@ -587,7 +712,7 @@ class ServerTest {
                 """);
         write("signed.why", "controller:\nname = params.name\n\nview:\nsigned {{name}}\n");
 
-        HttpResponse<String> posted = post("/sign", "name=why");
+        HttpResponse<String> posted = postWithToken("/sign", "name=why");
         assertEquals(303, posted.statusCode());
         assertEquals("/signed?name=why", posted.headers().firstValue("location").orElse(""));
         assertEquals("signed why\n", get("/signed?name=why").body());
