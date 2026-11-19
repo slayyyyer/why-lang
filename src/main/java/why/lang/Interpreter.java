@@ -17,7 +17,7 @@ import why.util.Suggest;
 public final class Interpreter {
 
     /** Free functions that exist without a {@code def}; kept here so tools can share the list. */
-    public static final List<String> BUILTINS = List.of("str", "int", "float", "redirect");
+    public static final List<String> BUILTINS = List.of("str", "int", "float", "redirect", "validate");
 
     private static final Object NEXT = new Object();
     private static final Object BREAK = new Object();
@@ -209,6 +209,7 @@ public final class Interpreter {
             case "int" -> Value.toLong(arg);
             case "float" -> Value.toDouble(arg);
             case "redirect" -> throw new Redirect(redirectTarget(arg, line));
+            case "validate" -> validate(args, line);
             default -> throw new WhyError(
                     "undefined function '" + name + "'" + suggestFunction(name), null, line);
         };
@@ -218,6 +219,44 @@ public final class Interpreter {
         List<String> candidates = new ArrayList<>(functions.keySet());
         candidates.addAll(BUILTINS);
         return Suggest.didYouMean(name, candidates);
+    }
+
+    /**
+     * {@code validate(form, {name: "required", note: "min:3"})} returns a hash of field to message,
+     * empty when the form is valid. Rules are comma-separated: required, min:N, max:N.
+     */
+    private static Object validate(List<Object> args, int line) {
+        Object rules = args.size() > 1 ? args.get(1) : null;
+        if (!(rules instanceof Map<?, ?> ruleMap)) {
+            throw new WhyError(
+                    "validate needs a rules hash, as in validate(form, {name: \"required\"})", null, line);
+        }
+        Map<?, ?> values = args.get(0) instanceof Map<?, ?> map ? map : Map.of();
+        Map<Object, Object> errors = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : ruleMap.entrySet()) {
+            String field = Value.str(entry.getKey());
+            String text = Value.str(values.get(field)).strip();
+            for (String rule : Value.str(entry.getValue()).split(",")) {
+                String trimmed = rule.strip();
+                if (trimmed.isEmpty()) continue;
+                if (trimmed.equals("required") && text.isEmpty()) {
+                    errors.put(field, "is required");
+                } else if (trimmed.startsWith("min:") && text.length() < ruleNumber(trimmed, line)) {
+                    errors.put(field, "must be at least " + ruleNumber(trimmed, line) + " characters");
+                } else if (trimmed.startsWith("max:") && text.length() > ruleNumber(trimmed, line)) {
+                    errors.put(field, "must be at most " + ruleNumber(trimmed, line) + " characters");
+                }
+            }
+        }
+        return errors;
+    }
+
+    private static int ruleNumber(String rule, int line) {
+        try {
+            return Integer.parseInt(rule.substring(rule.indexOf(':') + 1).strip());
+        } catch (NumberFormatException e) {
+            throw new WhyError("validate rule '" + rule + "' needs a number", null, line);
+        }
     }
 
     private static String redirectTarget(Object arg, int line) {
@@ -238,7 +277,27 @@ public final class Interpreter {
                     response.csp(Value.str(first), line);
                     yield null;
                 }
-                default -> throw new WhyError("response has no method '" + name + "' (try csp)", null, line);
+                case "status" -> {
+                    response.status(first, line);
+                    yield null;
+                }
+                case "header" -> {
+                    response.header(Value.str(first), Value.str(args.size() > 1 ? args.get(1) : null), line);
+                    yield null;
+                }
+                case "json" -> {
+                    response.json(first, line);
+                    yield null;
+                }
+                default -> throw new WhyError(
+                        "response has no method '" + name + "' (try status, header, csp or json)", null, line);
+            };
+        }
+
+        if (receiver instanceof Csrf csrf) {
+            return switch (name) {
+                case "token" -> csrf.token();
+                default -> throw new WhyError("csrf has no method '" + name + "' (try token)", null, line);
             };
         }
 

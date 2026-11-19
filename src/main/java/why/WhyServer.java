@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpsExchange;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -15,13 +16,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.time.Duration;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.zip.GZIPOutputStream;
 
+import why.lang.Csrf;
 import why.lang.Db;
 import why.lang.ExecutionBudget;
 import why.lang.Flash;
@@ -39,6 +44,8 @@ public final class WhyServer {
     private static final long MAX_INTERPRETER_STEPS = 100_000;
     private static final int MAX_OUTPUT_CHARS = 1_000_000;
     private static final int MAX_DIAGNOSTIC_CHARS = 500;
+    /** Below this, compression costs more than it saves. */
+    private static final int MIN_GZIP_BYTES = 512;
 
     private final Site site;
     private final PageCompiler compiler;
@@ -47,6 +54,7 @@ public final class WhyServer {
     private final boolean secureCookies;
     private final long requestTimeoutMillis;
     private final Semaphore requestSlots = new Semaphore(MAX_CONCURRENT_REQUESTS);
+    private final ExecutorService executor;
     private final ScheduledExecutorService timeouts;
     /** Bounded, expiring one-shot flashes keyed by server-issued session IDs. */
     private final FlashStore flashes = new FlashStore();
@@ -75,7 +83,8 @@ public final class WhyServer {
             thread.setDaemon(true);
             return thread;
         });
-        this.server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+        this.executor = Executors.newVirtualThreadPerTaskExecutor();
+        this.server.setExecutor(executor);
         this.server.createContext("/", this::handle);
     }
 
@@ -98,12 +107,21 @@ public final class WhyServer {
     }
 
     public void stop() {
-        server.stop(0);
+        stop(Duration.ZERO);
+    }
+
+    /** Stops accepting new requests, then waits up to {@code drain} for in-flight ones. */
+    public void stop(Duration drain) {
+        int seconds = (int) Math.min(60, Math.max(0, drain.toSeconds()));
+        server.stop(seconds);
+        executor.shutdownNow();
         timeouts.shutdownNow();
     }
 
     private void handle(HttpExchange exchange) throws IOException {
         long started = System.nanoTime();
+        String requestId = Long.toHexString(java.util.concurrent.ThreadLocalRandom.current().nextLong());
+        exchange.getResponseHeaders().set("X-Request-Id", requestId);
         setSecurityHeaders(exchange);
         String method = exchange.getRequestMethod();
         String path = exchange.getRequestURI().getPath();
@@ -115,6 +133,11 @@ public final class WhyServer {
             if (!method.equals("GET") && !method.equals("HEAD") && !method.equals("POST")) {
                 status = 405;
                 sendText(exchange, 405, "Method Not Allowed");
+                return;
+            }
+            if (path.equals("/health")) {
+                status = 200;
+                sendText(exchange, 200, "ok");
                 return;
             }
             if (headersTooLarge(exchange)) {
@@ -187,7 +210,7 @@ public final class WhyServer {
             if (timeoutTask != null) timeoutTask.cancel(false);
             if (admitted) requestSlots.release();
             long millis = (System.nanoTime() - started) / 1_000_000;
-            System.out.println(method + " " + path + " " + status + " " + millis + "ms");
+            System.out.println(requestId + " " + method + " " + path + " " + status + " " + millis + "ms");
             exchange.close();
         }
     }
@@ -236,11 +259,19 @@ public final class WhyServer {
         }
         Flash flash = new Flash(carried);
         Response page = new Response();
+        Map<Object, Object> fields = form(exchange);
+        String csrfValue = cookie(exchange, "why_csrf");
+        boolean hasToken = Csrf.valid(csrfValue);
+        Csrf csrf = new Csrf(hasToken ? csrfValue : Csrf.newToken(), !hasToken);
+        if (exchange.getRequestMethod().equals("POST") && !csrf.matches(fields.get("_token"))) {
+            sendHtml(exchange, 403, csrfPage());
+            return 403;
+        }
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(requestTimeoutMillis);
         String html;
         try {
             Program program = compiler.compile(file);
-            Map<String, Object> globals = globals(exchange, flash);
+            Map<String, Object> globals = globals(exchange, flash, csrf, fields);
             globals.put("response", page);
             try (Db db = new Db(site.dbFile())) {
                 globals.put("db", db);
@@ -252,6 +283,7 @@ public final class WhyServer {
             }
         } catch (Redirect redirect) {
             persistFlash(exchange, sessionId, flash);
+            setCsrfCookie(exchange, csrf);
             sendRedirect(exchange, redirect.location());
             return 303;
         } catch (RequestTimeout e) {
@@ -271,25 +303,48 @@ public final class WhyServer {
             return 500;
         }
         persistFlash(exchange, sessionId, flash);
+        setCsrfCookie(exchange, csrf);
+        applyPageHeaders(exchange, page);
         applyPageCsp(exchange, page);
-        sendHtml(exchange, 200, html);
-        return 200;
+        int status = page.status();
+        if (page.json() != null) {
+            send(exchange, status, "application/json; charset=utf-8",
+                    page.json().getBytes(StandardCharsets.UTF_8));
+        } else {
+            sendHtml(exchange, status, html);
+        }
+        return status;
     }
 
     /** The why_session cookie value; it is accepted only if the server issued it. */
     private static String sessionId(HttpExchange exchange) {
+        String id = cookie(exchange, "why_session");
+        return id != null && id.matches("[A-Za-z0-9_-]{1,64}") ? id : null;
+    }
+
+    /** One cookie value by name, or null. */
+    private static String cookie(HttpExchange exchange, String name) {
         List<String> headers = exchange.getRequestHeaders().get("Cookie");
         if (headers == null) return null;
         for (String header : headers) {
             for (String part : header.split(";")) {
                 int equals = part.indexOf('=');
                 if (equals < 0) continue;
-                if (!part.substring(0, equals).strip().equals("why_session")) continue;
-                String id = part.substring(equals + 1).strip();
-                if (id.matches("[A-Za-z0-9_-]{1,64}")) return id;
+                if (!part.substring(0, equals).strip().equals(name)) continue;
+                String value = part.substring(equals + 1).strip();
+                if (!value.isEmpty() && value.length() <= 256) return value;
             }
         }
         return null;
+    }
+
+    /** Issues the CSRF cookie only when the page actually rendered its token. */
+    private void setCsrfCookie(HttpExchange exchange, Csrf csrf) {
+        if (!csrf.shouldSetCookie()) return;
+        StringBuilder cookie = new StringBuilder("why_csrf=").append(csrf.token())
+                .append("; Path=/; HttpOnly; SameSite=Lax");
+        if (secureCookies || exchange instanceof HttpsExchange) cookie.append("; Secure");
+        exchange.getResponseHeaders().add("Set-Cookie", cookie.toString());
     }
 
     /** Stores messages set this request; a visitor without an issued session gets a cookie. */
@@ -316,6 +371,15 @@ public final class WhyServer {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
         long size = Files.size(file);
         if (size > AllocationLimits.STATIC_ASSET_BYTES) throw assetTooLarge(file, size);
+        String etag = "\"" + Long.toHexString(size) + "-"
+                + Long.toHexString(Files.getLastModifiedTime(file).toMillis()) + "\"";
+        exchange.getResponseHeaders().set("ETag", etag);
+        exchange.getResponseHeaders().set("Cache-Control", "public, max-age=60");
+        String ifNoneMatch = exchange.getRequestHeaders().getFirst("If-None-Match");
+        if (ifNoneMatch != null && ifNoneMatch.contains(etag)) {
+            exchange.sendResponseHeaders(304, -1);
+            return 304;
+        }
         byte[] body = Files.readAllBytes(file);
         if (body.length > AllocationLimits.STATIC_ASSET_BYTES) throw assetTooLarge(file, body.length);
         send(exchange, 200, contentType(name), body);
@@ -328,12 +392,11 @@ public final class WhyServer {
                 + AllocationLimits.STATIC_ASSET_BYTES, display, 0);
     }
 
-    private Map<String, Object> globals(HttpExchange exchange, Flash flash) {
+    private Map<String, Object> globals(HttpExchange exchange, Flash flash, Csrf csrf,
+            Map<Object, Object> form) {
         Map<Object, Object> params = new LinkedHashMap<>();
         String rawQuery = exchange.getRequestURI().getRawQuery();
         if (rawQuery != null && !rawQuery.isEmpty()) parseUrlEncoded(rawQuery, params);
-
-        Map<Object, Object> form = form(exchange);
 
         Map<Object, Object> request = new LinkedHashMap<>();
         request.put("method", exchange.getRequestMethod());
@@ -347,6 +410,7 @@ public final class WhyServer {
         globals.put("params", params);
         globals.put("form", form);
         globals.put("flash", flash);
+        globals.put("csrf", csrf);
         return globals;
     }
 
@@ -403,6 +467,11 @@ public final class WhyServer {
         exchange.getResponseHeaders().set("X-Frame-Options", "DENY");
     }
 
+    /** Page-set headers, applied before the body so the server fills only what is still unset. */
+    private static void applyPageHeaders(HttpExchange exchange, Response page) {
+        page.headers().forEach((name, value) -> exchange.getResponseHeaders().set(name, value));
+    }
+
     /** Applies a page's opt-in CSP while keeping frame protection in the policy. */
     private static void applyPageCsp(HttpExchange exchange, Response page) {
         String policy = page.csp();
@@ -432,16 +501,49 @@ public final class WhyServer {
     }
 
     private void send(HttpExchange exchange, int status, String contentType, byte[] body) throws IOException {
-        exchange.getResponseHeaders().set("Content-Type", contentType);
-        exchange.getResponseHeaders().set("Cache-Control", "no-store");
-        if (exchange.getRequestMethod().equals("HEAD")) {
+        if (!exchange.getResponseHeaders().containsKey("Content-Type")) {
+            exchange.getResponseHeaders().set("Content-Type", contentType);
+        }
+        if (!exchange.getResponseHeaders().containsKey("Cache-Control")) {
+            exchange.getResponseHeaders().set("Cache-Control", "no-store");
+        }
+        if (exchange.getRequestMethod().equals("HEAD") || status == 204 || status == 304) {
             exchange.sendResponseHeaders(status, -1);
             return;
+        }
+        if (body.length >= MIN_GZIP_BYTES && compressible(contentType) && acceptsGzip(exchange)) {
+            body = gzip(body);
+            exchange.getResponseHeaders().set("Content-Encoding", "gzip");
+            exchange.getResponseHeaders().set("Vary", "Accept-Encoding");
         }
         exchange.sendResponseHeaders(status, body.length);
         try (OutputStream out = exchange.getResponseBody()) {
             out.write(body);
         }
+    }
+
+    private static boolean compressible(String contentType) {
+        return contentType.startsWith("text/")
+                || contentType.startsWith("application/json")
+                || contentType.startsWith("application/javascript")
+                || contentType.startsWith("image/svg+xml");
+    }
+
+    private static boolean acceptsGzip(HttpExchange exchange) {
+        List<String> values = exchange.getRequestHeaders().get("Accept-Encoding");
+        if (values == null) return false;
+        for (String value : values) {
+            if (value.toLowerCase(Locale.ROOT).contains("gzip")) return true;
+        }
+        return false;
+    }
+
+    private static byte[] gzip(byte[] body) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(64, body.length / 2));
+        try (GZIPOutputStream gzip = new GZIPOutputStream(out)) {
+            gzip.write(body);
+        }
+        return out.toByteArray();
     }
 
     private static String contentType(String name) {
@@ -519,6 +621,12 @@ public final class WhyServer {
             }
         }
         return line.length() - line.stripLeading().length();
+    }
+
+    /** A form POST without a token: the page never rendered {@code csrf.token}. */
+    private static String csrfPage() {
+        return layout("Form expired", "<h1>403 — Form expired</h1>"
+                + "<p>Reload the page and submit the form again.</p>");
     }
 
     /** A 504 response with no paths, source, SQL or stack details. */

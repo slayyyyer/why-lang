@@ -8,6 +8,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,6 +24,9 @@ import why.WhyError;
 public final class Db implements AutoCloseable {
     /** How often SQLite checks whether the request was interrupted. */
     private static final int PROGRESS_VM_CALLS = 1_000;
+
+    /** How long a writer waits for the write lock before SQLite reports it as busy. */
+    private static final int BUSY_TIMEOUT_MILLIS = 5_000;
 
     private static final ProgressHandler ABORT_ON_INTERRUPT = new ProgressHandler() {
         @Override
@@ -95,6 +99,12 @@ public final class Db implements AutoCloseable {
         }
         try {
             conn = DriverManager.getConnection("jdbc:sqlite:" + file.toAbsolutePath());
+            // WAL lets readers proceed during a write; the timeout makes a second writer wait instead
+            // of failing with "database is locked".
+            try (Statement statement = conn.createStatement()) {
+                statement.execute("pragma journal_mode = WAL");
+                statement.execute("pragma busy_timeout = " + BUSY_TIMEOUT_MILLIS);
+            }
             ProgressHandler.setHandler(conn, PROGRESS_VM_CALLS, ABORT_ON_INTERRUPT);
             return conn;
         } catch (SQLException e) {

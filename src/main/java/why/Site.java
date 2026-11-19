@@ -53,7 +53,8 @@ public final class Site {
         Path root = ClasspathSite.extract(loader == null ? Site.class.getClassLoader() : loader);
         Path database = (dbFile == null ? root.resolve("data.db") : dbFile).toAbsolutePath().normalize();
         Path schema = root.resolve("schema.sql");
-        if (!Files.exists(database) && Files.isRegularFile(schema)) {
+        boolean migrations = Files.isDirectory(root.resolve(Migrations.DIRECTORY));
+        if (!migrations && !Files.exists(database) && Files.isRegularFile(schema)) {
             Path parent = database.getParent();
             if (parent != null) Files.createDirectories(parent);
             try {
@@ -61,6 +62,11 @@ public final class Site {
             } catch (RuntimeException e) {
                 throw new IOException("could not apply schema.sql: " + e.getMessage(), e);
             }
+        }
+        try {
+            Migrations.apply(root, database);
+        } catch (RuntimeException e) {
+            throw new IOException("could not apply migrations: " + e.getMessage(), e);
         }
         return new Site(root, database);
     }

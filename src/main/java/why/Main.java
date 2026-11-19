@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 
 import why.lang.Db;
@@ -11,6 +12,15 @@ import why.lang.Db;
 /** Command line entry point: {@code java -jar why.jar ./site}. */
 public final class Main {
     public static void main(String[] args) {
+        if (args.length > 0 && args[0].equals("new")) {
+            if (args.length != 2) {
+                fail("new needs one folder, as in: why new mysite");
+                return;
+            }
+            System.exit(Scaffold.create(Path.of(args[1])));
+            return;
+        }
+
         Path directory = Path.of(".");
         String host = "127.0.0.1";
         int port = 8080;
@@ -98,8 +108,10 @@ public final class Main {
             return;
         }
 
+        // A migrations folder owns the schema; schema.sql only seeds a fresh database without one.
+        Path migrations = root.resolve(Migrations.DIRECTORY);
         Path schema = root.resolve("schema.sql");
-        if (!Files.exists(dbFile) && Files.isRegularFile(schema)) {
+        if (!Files.isDirectory(migrations) && !Files.exists(dbFile) && Files.isRegularFile(schema)) {
             try {
                 Db.applyScript(dbFile, Files.readString(schema, StandardCharsets.UTF_8));
                 System.out.println("why: created " + dbFile + " from schema.sql");
@@ -107,6 +119,15 @@ public final class Main {
                 fail("could not apply schema.sql: " + e.getMessage());
                 return;
             }
+        }
+        try {
+            int applied = Migrations.apply(root, dbFile);
+            if (applied > 0) {
+                System.out.println("why: applied " + applied + " migration(s) to " + dbFile);
+            }
+        } catch (RuntimeException | IOException e) {
+            fail("could not apply migrations: " + e.getMessage());
+            return;
         }
 
         Site site = new Site(root, dbFile);
@@ -116,7 +137,7 @@ public final class Main {
             String shownHost = server.address().getAddress().isLoopbackAddress() ? "localhost" : host;
             System.out.println("Why is serving " + root + " at http://" + shownHost + ":" + server.port());
             System.out.println("press Ctrl+C to stop");
-            Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> server.stop(Duration.ofSeconds(5))));
             new CountDownLatch(1).await();
         } catch (IOException e) {
             fail("cannot start server: " + e.getMessage());
@@ -141,9 +162,11 @@ public final class Main {
         System.out.println("""
                 usage: java -jar why.jar [site] [options]
                        java -jar why.jar check [site]
+                       java -jar why.jar new FOLDER
 
                   site              folder of .why pages (default: .)
                   check             compile every page, report problems, print the page map
+                  new FOLDER        write a runnable starter site
                   -p, --port PORT   port to listen on (default: 8080)
                       --host HOST   interface to bind (default: 127.0.0.1; use 0.0.0.0 to expose)
                       --db FILE     SQLite database file (default: <site>/data.db)
