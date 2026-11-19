@@ -10,7 +10,7 @@ count = posts.length
 view:
 {{> header}}
 <h1>Latest posts</h1>
-{{#if count}}
+{{#if count > 0}}
 {{#each posts}}
 <article>
   <h2><a href="/post?id={{it.id}}">{{it.title}}</a></h2>

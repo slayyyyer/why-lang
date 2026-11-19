@@ -182,7 +182,7 @@ public final class Parser {
         List<Ast.Stmt> body = statements(BODY_ENDS);
         skipSeparators();
         expectKeyword("end");
-        return new Ast.Def(name.text(), params, body, line);
+        return new Ast.Def(name.text(), params, body, line, file);
     }
 
     private void consumeThen() {

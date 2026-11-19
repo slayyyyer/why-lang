@@ -11,9 +11,13 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 import why.WhyError;
+import why.util.Suggest;
 
 /** Tree-walking evaluator for controllers and for expressions inside template tags. */
 public final class Interpreter {
+
+    /** Free functions that exist without a {@code def}; kept here so tools can share the list. */
+    public static final List<String> BUILTINS = List.of("str", "int", "float", "redirect");
 
     private static final Object NEXT = new Object();
     private static final Object BREAK = new Object();
@@ -23,7 +27,7 @@ public final class Interpreter {
     public Interpreter(Map<String, Ast.Def> defs, Scope globals) {
         for (Map.Entry<String, Ast.Def> entry : defs.entrySet()) {
             Ast.Def def = entry.getValue();
-            functions.put(entry.getKey(), new Function(def.params(), def.body(), globals));
+            functions.put(entry.getKey(), new Function(def.params(), def.body(), globals, def.file()));
         }
     }
 
@@ -74,7 +78,7 @@ public final class Interpreter {
                 }
             }
         } else if (stmt instanceof Ast.Def def) {
-            functions.put(def.name(), new Function(def.params(), def.body(), scope));
+            functions.put(def.name(), new Function(def.params(), def.body(), scope, def.file()));
         } else if (stmt instanceof Ast.Return value) {
             throw new ReturnSignal(value.value() == null ? null : eval(value.value(), scope));
         } else if (stmt instanceof Ast.Break) {
@@ -142,7 +146,7 @@ public final class Interpreter {
         for (Ast.Expr arg : call.args()) args.add(eval(arg, scope));
         Function block = call.block() == null
                 ? null
-                : new Function(call.block().params(), call.block().body(), scope);
+                : new Function(call.block().params(), call.block().body(), scope, null);
 
         if (call.target() == null) {
             Function fn = functions.get(call.name());
@@ -161,6 +165,8 @@ public final class Interpreter {
             return execBody(fn.body(), scope);
         } catch (ReturnSignal signal) {
             return signal.value;
+        } catch (WhyError e) {
+            throw e.locate(fn.file(), e.line());
         }
     }
 
@@ -170,8 +176,24 @@ public final class Interpreter {
             case "str" -> Value.str(arg);
             case "int" -> Value.toLong(arg);
             case "float" -> Value.toDouble(arg);
-            default -> throw new WhyError("undefined function '" + name + "'", null, line);
+            case "redirect" -> throw new Redirect(redirectTarget(arg, line));
+            default -> throw new WhyError(
+                    "undefined function '" + name + "'" + suggestFunction(name), null, line);
         };
+    }
+
+    private String suggestFunction(String name) {
+        List<String> candidates = new ArrayList<>(functions.keySet());
+        candidates.addAll(BUILTINS);
+        return Suggest.didYouMean(name, candidates);
+    }
+
+    private static String redirectTarget(Object arg, int line) {
+        String target = Value.str(arg);
+        if (target.isEmpty() || target.indexOf('\r') >= 0 || target.indexOf('\n') >= 0) {
+            throw new WhyError("redirect needs a path without newlines", null, line);
+        }
+        return target;
     }
 
     private Object method(Object receiver, String name, List<Object> args, Function block, int line) {
@@ -183,12 +205,16 @@ public final class Interpreter {
                 throw new WhyError("db." + name + " needs a SQL string", null, line);
             }
             List<Object> params = args.isEmpty() ? List.of() : args.subList(1, args.size());
-            return switch (name) {
-                case "query" -> db.query(sql, params);
-                case "exec" -> db.exec(sql, params);
-                case "get" -> db.get(sql, params);
-                default -> throw new WhyError("'db' has no method '" + name + "' (try query, exec or get)", null, line);
-            };
+            try {
+                return switch (name) {
+                    case "query" -> db.query(sql, params);
+                    case "exec" -> db.exec(sql, params);
+                    case "get" -> db.get(sql, params);
+                    default -> throw new WhyError("'db' has no method '" + name + "' (try query, exec or get)", null, line);
+                };
+            } catch (WhyError e) {
+                throw e.atLine(line);
+            }
         }
 
         if (receiver instanceof List<?> raw) {

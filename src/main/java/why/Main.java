@@ -14,8 +14,9 @@ public final class Main {
         Path directory = Path.of(".");
         int port = 8080;
         Path db = null;
+        boolean check = args.length > 0 && args[0].equals("check");
 
-        for (int i = 0; i < args.length; i++) {
+        for (int i = check ? 1 : 0; i < args.length; i++) {
             String arg = args[i];
             switch (arg) {
                 case "-h", "--help" -> {
@@ -23,6 +24,10 @@ public final class Main {
                     return;
                 }
                 case "-p", "--port" -> {
+                    if (check) {
+                        fail("check does not take " + arg);
+                        return;
+                    }
                     String value = value(args, ++i, arg);
                     try {
                         port = Integer.parseInt(value);
@@ -31,7 +36,13 @@ public final class Main {
                         return;
                     }
                 }
-                case "--db" -> db = Path.of(value(args, ++i, arg));
+                case "--db" -> {
+                    if (check) {
+                        fail("check does not take " + arg);
+                        return;
+                    }
+                    db = Path.of(value(args, ++i, arg));
+                }
                 default -> {
                     if (arg.startsWith("-")) {
                         fail("unknown option '" + arg + "'");
@@ -45,6 +56,12 @@ public final class Main {
         Path root = directory.toAbsolutePath().normalize();
         if (!Files.isDirectory(root)) {
             fail("site folder not found: " + root);
+            return;
+        }
+
+        if (check) {
+            int found = new Checker(new Site(root)).check(System.out);
+            if (found != 0) System.exit(1);
             return;
         }
 
@@ -98,8 +115,10 @@ public final class Main {
     private static void usage() {
         System.out.println("""
                 usage: java -jar why.jar [site] [options]
+                       java -jar why.jar check [site]
 
                   site              folder of .why pages (default: .)
+                  check             compile every page, report problems, print the page map
                   -p, --port PORT   port to listen on (default: 8080)
                       --db FILE     SQLite database file (default: <site>/data.db)
                   -h, --help        show this help

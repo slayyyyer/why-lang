@@ -27,7 +27,8 @@ public final class Ast {
 
     public record While(Expr cond, List<Stmt> body, int line) implements Stmt {}
 
-    public record Def(String name, List<String> params, List<Stmt> body, int line) implements Stmt {}
+    /** {@code file} is the page the def was written in, for runtime error locations. */
+    public record Def(String name, List<String> params, List<Stmt> body, int line, String file) implements Stmt {}
 
     /** {@code return} with no value has a null value. */
     public record Return(Expr value, int line) implements Stmt {}

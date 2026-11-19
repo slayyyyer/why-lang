@@ -72,6 +72,14 @@ class ServerTest {
         return client.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
+    private HttpResponse<String> post(String path, String body) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + path))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
     @Test
     void rendersAPageWithImportsAndDbRows() throws Exception {
         HttpResponse<String> response = get("/");
@@ -105,8 +113,102 @@ class ServerTest {
     }
 
     @Test
+    void errorPageShowsTheSourceChainAndASuggestion() throws Exception {
+        write("header.why", "imports:\nnav\n\nview:\n<header>\n{{> nav}}\n</header>\n");
+        write("nav.why", "view:\n<nav>{{str2(\"hi\")}}</nav>\n");
+        write("chain.why", """
+                imports:
+                header
+
+                controller:
+                title = "x"
+
+                view:
+                {{> header}}
+                """);
+
+        HttpResponse<String> response = get("/chain");
+        assertEquals(500, response.statusCode());
+        String body = response.body();
+        assertTrue(body.contains("<p class=\"loc\">nav.why:2</p>"));
+        assertTrue(body.contains("chain.why:8"));
+        assertTrue(body.contains("header.why:6"));
+        assertTrue(body.contains("str2"));
+        assertTrue(body.contains("^"));
+        assertTrue(body.contains("did you mean"));
+    }
+
+    @Test
+    void errorPageSuggestsAMisspelledPartial() throws Exception {
+        write("page.why", "imports:\nheader\n\nview:\n{{> heder}}\n");
+
+        HttpResponse<String> response = get("/page");
+        assertEquals(500, response.statusCode());
+        assertTrue(response.body().contains("page.why:5"));
+        assertTrue(response.body().contains("heder"));
+        assertTrue(response.body().contains("did you mean"));
+    }
+
+    @Test
+    void compileErrorsInAnImportShowTheImportChain() throws Exception {
+        write("leaf.why", "view:\n{{> nope}}\n");
+        write("mid.why", "imports:\nleaf\n\nview:\n{{> leaf}}\n");
+        write("top.why", "imports:\nmid\n\nview:\n{{> mid}}\n");
+
+        HttpResponse<String> response = get("/top");
+        assertEquals(500, response.statusCode());
+        String body = response.body();
+        assertTrue(body.contains("leaf.why:2"));
+        assertTrue(body.contains("top.why:2"));
+        assertTrue(body.contains("mid.why:2"));
+    }
+
+    @Test
+    void syntaxErrorsShowTheOffendingLine() throws Exception {
+        write("syntax.why", "controller:\nx = )\n\nview:\nhi\n");
+
+        HttpResponse<String> response = get("/syntax");
+        assertEquals(500, response.statusCode());
+        String body = response.body();
+        assertTrue(body.contains("syntax.why:2"));
+        assertTrue(body.contains("x = )"));
+        assertTrue(body.contains("^"));
+    }
+
+    @Test
+    void underscoreFilesAreImportOnly() throws Exception {
+        write("_snippet.why", "view:\n<span>snippet</span>\n");
+        write("_secret.css", "body{color:black}\n");
+        write("uses.why", "imports:\n_snippet\n\nview:\n{{> _snippet}}\n");
+
+        assertEquals(404, get("/_snippet").statusCode());
+        assertEquals(404, get("/_snippet.why").statusCode());
+        assertEquals(404, get("/_secret.css").statusCode());
+        assertEquals("<span>snippet</span>\n\n", get("/uses").body());
+    }
+
+    @Test
     void queryParametersReachThePage() throws Exception {
         write("echo.why", "controller:\nname = params.name\n\nview:\nhello {{name}}\n");
         assertEquals("hello why\n", get("/echo?name=why").body());
+    }
+
+    @Test
+    void postRedirectsAndFormFieldsReachThePage() throws Exception {
+        write("sign.why", """
+                controller:
+                if request.method == "POST"
+                  redirect("/signed?name=" + form.name)
+                end
+
+                view:
+                <form method="post" action="/sign"></form>
+                """);
+        write("signed.why", "controller:\nname = params.name\n\nview:\nsigned {{name}}\n");
+
+        HttpResponse<String> posted = post("/sign", "name=why");
+        assertEquals(303, posted.statusCode());
+        assertEquals("/signed?name=why", posted.headers().firstValue("location").orElse(""));
+        assertEquals("signed why\n", get("/signed?name=why").body());
     }
 }

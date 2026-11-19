@@ -42,7 +42,9 @@ The specification I was given ends in the middle of the `imports:` rules, so the
 
 - Hot reload / compile cache: every request re-reads and recompiles the page. Fast enough for a
   PoC, and it makes "edit and refresh" trivially correct.
-- POST bodies, forms, cookies, sessions, redirects, custom headers/status, file uploads.
+- Urlencoded POST bodies are parsed into `form`, and `redirect(path)` answers 303. Multipart
+  bodies, uploads, cookies, sessions/flash, custom headers and other statuses are still out.
+  The awkward parts are recorded in [FRICTION.md](FRICTION.md).
 - Custom 404 pages, directory listings, configurable index files.
 - A JSON helper (`render json:`). The spec allows Jackson or Gson, but nothing needed JSON yet,
   so the dependency was left out.

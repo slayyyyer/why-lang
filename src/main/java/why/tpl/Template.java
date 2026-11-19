@@ -9,6 +9,7 @@ import why.lang.Interpreter;
 import why.lang.Scope;
 import why.lang.Value;
 import why.util.Html;
+import why.util.Suggest;
 
 /** A compiled view: literal text, {@code {{...}}} mustaches, blocks and partials. */
 public final class Template {
@@ -33,6 +34,11 @@ public final class Template {
         this.nodes = List.copyOf(nodes);
     }
 
+    /** The parsed view nodes, for tools that inspect templates without rendering them. */
+    public List<Node> nodes() {
+        return nodes;
+    }
+
     public String render(Interpreter interp, Scope scope, Map<String, Template> partials) {
         StringBuilder out = new StringBuilder();
         renderInto(out, interp, scope, partials);
@@ -46,22 +52,32 @@ public final class Template {
     private void renderNodes(StringBuilder out, List<Node> nodes, Interpreter interp, Scope scope,
                              Map<String, Template> partials) {
         for (Node node : nodes) {
-            if (node instanceof Text text) {
-                out.append(text.text());
-            } else if (node instanceof Echo echo) {
-                String value = Value.str(interp.eval(echo.expr(), scope));
-                out.append(echo.escape() ? Html.escape(value) : value);
-            } else if (node instanceof Partial partial) {
-                Template target = partials.get(partial.name());
-                if (target == null) {
-                    throw new WhyError("unknown partial '" + partial.name() + "'", file, partial.line());
+            try {
+                if (node instanceof Text text) {
+                    out.append(text.text());
+                } else if (node instanceof Echo echo) {
+                    String value = Value.str(interp.eval(echo.expr(), scope));
+                    out.append(echo.escape() ? Html.escape(value) : value);
+                } else if (node instanceof Partial partial) {
+                    Template target = partials.get(partial.name());
+                    if (target == null) {
+                        throw new WhyError("unknown partial '" + partial.name() + "'"
+                                + Suggest.didYouMean(partial.name(), partials.keySet()),
+                                file, partial.line());
+                    }
+                    try {
+                        target.renderInto(out, interp, scope, partials);
+                    } catch (WhyError e) {
+                        throw e.at(file, partial.line());
+                    }
+                } else if (node instanceof Block block) {
+                    List<Node> branch = Value.truthy(interp.eval(block.cond(), scope)) ? block.body() : block.otherwise();
+                    renderNodes(out, branch, interp, scope, partials);
+                } else if (node instanceof Each each) {
+                    renderEach(out, each, interp, scope, partials);
                 }
-                target.renderInto(out, interp, scope, partials);
-            } else if (node instanceof Block block) {
-                List<Node> branch = Value.truthy(interp.eval(block.cond(), scope)) ? block.body() : block.otherwise();
-                renderNodes(out, branch, interp, scope, partials);
-            } else if (node instanceof Each each) {
-                renderEach(out, each, interp, scope, partials);
+            } catch (WhyError e) {
+                throw e.locate(file, e.line());
             }
         }
     }
@@ -109,7 +125,8 @@ public final class Template {
         for (Node node : nodes) {
             if (node instanceof Partial partial) {
                 if (!partials.containsKey(partial.name())) {
-                    throw new WhyError("unknown partial '" + partial.name() + "'", file, partial.line());
+                    throw new WhyError("unknown partial '" + partial.name() + "'"
+                            + Suggest.didYouMean(partial.name(), partials.keySet()), file, partial.line());
                 }
             } else if (node instanceof Block block) {
                 validateNodes(block.body(), partials);

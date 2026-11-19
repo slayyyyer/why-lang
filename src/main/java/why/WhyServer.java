@@ -11,11 +11,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Executors;
 
 import why.lang.Db;
+import why.lang.Redirect;
 import why.util.Html;
 
 /** The HTTP server: one handler, virtual threads, every request compiled and rendered from disk. */
@@ -50,7 +52,7 @@ public final class WhyServer {
         String path = exchange.getRequestURI().getPath();
         int status = 500;
         try {
-            if (!method.equals("GET") && !method.equals("HEAD")) {
+            if (!method.equals("GET") && !method.equals("HEAD") && !method.equals("POST")) {
                 status = 405;
                 sendText(exchange, 405, "Method Not Allowed");
                 return;
@@ -61,7 +63,14 @@ public final class WhyServer {
                 sendHtml(exchange, 404, notFound(path));
                 return;
             }
-            status = site.isPage(file) ? servePage(exchange, file) : serveStatic(exchange, file);
+            if (site.isPage(file)) {
+                status = servePage(exchange, file);
+            } else if (method.equals("POST")) {
+                status = 405;
+                sendText(exchange, 405, "Method Not Allowed");
+            } else {
+                status = serveStatic(exchange, file);
+            }
         } catch (RuntimeException e) {
             status = 500;
             e.printStackTrace();
@@ -87,10 +96,13 @@ public final class WhyServer {
                 globals.put("db", db);
                 html = program.render(globals);
             }
+        } catch (Redirect redirect) {
+            sendRedirect(exchange, redirect.location());
+            return 303;
         } catch (WhyError e) {
-            WhyError located = e.file() == null ? new WhyError(e.getMessage(), display, e.line()) : e;
+            WhyError located = e.locate(display, e.line());
             System.err.println("why: " + located);
-            sendHtml(exchange, 500, errorPage("Why error", located.getMessage(), located.location()));
+            sendHtml(exchange, 500, whyErrorPage(located));
             return 500;
         }
         sendHtml(exchange, 200, html);
@@ -106,26 +118,50 @@ public final class WhyServer {
     private Map<String, Object> globals(HttpExchange exchange) {
         Map<Object, Object> params = new LinkedHashMap<>();
         String rawQuery = exchange.getRequestURI().getRawQuery();
-        if (rawQuery != null && !rawQuery.isEmpty()) {
-            for (String pair : rawQuery.split("&")) {
-                if (pair.isEmpty()) continue;
-                int equals = pair.indexOf('=');
-                String key = equals < 0 ? pair : pair.substring(0, equals);
-                String value = equals < 0 ? "" : pair.substring(equals + 1);
-                params.put(decode(key), decode(value));
-            }
-        }
+        if (rawQuery != null && !rawQuery.isEmpty()) parseUrlEncoded(rawQuery, params);
+
+        Map<Object, Object> form = form(exchange);
 
         Map<Object, Object> request = new LinkedHashMap<>();
         request.put("method", exchange.getRequestMethod());
         request.put("path", exchange.getRequestURI().getPath());
         request.put("query", rawQuery == null ? "" : rawQuery);
         request.put("params", params);
+        request.put("form", form);
 
         Map<String, Object> globals = new LinkedHashMap<>();
         globals.put("request", request);
         globals.put("params", params);
+        globals.put("form", form);
         return globals;
+    }
+
+    /** POSTed urlencoded fields; empty on GET or other content types. */
+    private Map<Object, Object> form(HttpExchange exchange) {
+        Map<Object, Object> fields = new LinkedHashMap<>();
+        if (!exchange.getRequestMethod().equals("POST")) return fields;
+        String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+        if (contentType != null
+                && !contentType.toLowerCase(Locale.ROOT).startsWith("application/x-www-form-urlencoded")) {
+            return fields;
+        }
+        try {
+            String body = new String(exchange.getRequestBody().readNBytes(64 * 1024), StandardCharsets.UTF_8);
+            parseUrlEncoded(body, fields);
+        } catch (IOException e) {
+            throw new WhyError("cannot read the request body: " + e.getMessage());
+        }
+        return fields;
+    }
+
+    private static void parseUrlEncoded(String encoded, Map<Object, Object> into) {
+        for (String pair : encoded.split("&")) {
+            if (pair.isEmpty()) continue;
+            int equals = pair.indexOf('=');
+            String key = equals < 0 ? pair : pair.substring(0, equals);
+            String value = equals < 0 ? "" : pair.substring(equals + 1);
+            into.put(decode(key), decode(value));
+        }
     }
 
     private static String decode(String text) {
@@ -142,6 +178,12 @@ public final class WhyServer {
 
     private void sendText(HttpExchange exchange, int status, String text) throws IOException {
         send(exchange, status, "text/plain; charset=utf-8", text.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void sendRedirect(HttpExchange exchange, String location) throws IOException {
+        exchange.getResponseHeaders().set("Location", location);
+        exchange.getResponseHeaders().set("Cache-Control", "no-store");
+        exchange.sendResponseHeaders(303, -1);
     }
 
     private void send(HttpExchange exchange, int status, String contentType, byte[] body) throws IOException {
@@ -181,6 +223,71 @@ public final class WhyServer {
         return layout("Not found", "<h1>404</h1><p>No page at <code>" + Html.escape(path) + "</code>.</p>");
     }
 
+    /** The 500 page: file:line, the source excerpt with a caret, the message, then the path here. */
+    private String whyErrorPage(WhyError error) {
+        StringBuilder body = new StringBuilder("<h1>Why error</h1>");
+        if (!error.location().isEmpty()) {
+            body.append("<p class=\"loc\">").append(Html.escape(error.location())).append("</p>");
+        }
+
+        String source = sourceLine(error.file(), error.line());
+        if (source != null) {
+            source = source.replace("\t", "    ");
+            int column = caretColumn(source, error.getMessage());
+            String number = String.valueOf(error.line());
+            body.append("<pre class=\"snippet\">")
+                    .append(number).append(" | ").append(Html.escape(source)).append('\n')
+                    .append(" ".repeat(number.length())).append(" | ")
+                    .append(" ".repeat(column)).append("^</pre>");
+        }
+
+        body.append("<pre>").append(Html.escape(error.getMessage())).append("</pre>");
+
+        if (!error.chain().isEmpty()) {
+            body.append("<p class=\"via\">Reached via</p><ul class=\"chain\">");
+            for (WhyError.Frame frame : error.chain()) {
+                body.append("<li><code>")
+                        .append(Html.escape(frame.file() + ":" + frame.line()))
+                        .append("</code>");
+                String callSite = sourceLine(frame.file(), frame.line());
+                if (callSite != null) body.append(" ").append(Html.escape(callSite.strip()));
+                body.append("</li>");
+            }
+            body.append("</ul>");
+        }
+
+        return layout("Why error", body.toString());
+    }
+
+    /** One source line, or null when the file or line is unavailable. */
+    private String sourceLine(String file, int line) {
+        if (file == null || line <= 0) return null;
+        Path path = site.root().resolve(file).normalize();
+        if (!path.startsWith(site.root()) || !Files.isRegularFile(path)) return null;
+        try {
+            List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
+            return line <= lines.size() ? lines.get(line - 1) : null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Where to put the caret: under the quoted name in the message when it appears on the line,
+     * otherwise under the first non-space character.
+     */
+    private static int caretColumn(String line, String message) {
+        int quote = message.indexOf('\'');
+        if (quote >= 0) {
+            int end = message.indexOf('\'', quote + 1);
+            if (end > quote) {
+                int at = line.indexOf(message.substring(quote + 1, end));
+                if (at >= 0) return at;
+            }
+        }
+        return line.length() - line.stripLeading().length();
+    }
+
     private static String errorPage(String title, String message, String location) {
         StringBuilder body = new StringBuilder("<h1>").append(Html.escape(title)).append("</h1>");
         if (!location.isEmpty()) {
@@ -195,6 +302,9 @@ public final class WhyServer {
                 + "<style>body{font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;margin:6vh auto;max-width:44rem;"
                 + "padding:0 1.5rem;color:#222}h1{font-size:1.4rem}.loc{color:#a00}"
                 + "pre{background:#f4f4f4;padding:1rem;overflow:auto;border-left:3px solid #a00}"
+                + ".snippet{background:#fff;padding:.5rem .75rem}"
+                + ".via{margin:1.5rem 0 .25rem;color:#777}"
+                + ".chain{margin:.25rem 0;padding-left:1.2rem;color:#555}.chain li{margin:.1rem 0}"
                 + "code{background:#f4f4f4;padding:.1rem .3rem}</style></head><body>" + body + "</body></html>";
     }
 }

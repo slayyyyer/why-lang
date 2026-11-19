@@ -3,7 +3,11 @@ package why;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** A folder of pages, and the rules for turning a request path into a file inside it. */
+/**
+ * A folder of pages, and the rules for turning a request path into a file inside it.
+ * Files whose name starts with {@code _} are import-only and are never returned by
+ * {@link #resolve(String)}.
+ */
 public final class Site {
 
     /** The page file extension. Defined once, here. */
@@ -55,13 +59,19 @@ public final class Site {
         if (!candidate.startsWith(root)) return null;
 
         if (Files.isDirectory(candidate)) candidate = candidate.resolve(INDEX_PAGE);
-        if (Files.isRegularFile(candidate)) return candidate;
-
-        String name = candidate.getFileName().toString();
-        if (!name.contains(".")) {
-            Path withExtension = candidate.resolveSibling(name + PAGE_EXTENSION);
-            if (Files.isRegularFile(withExtension)) return withExtension;
+        Path found = Files.isRegularFile(candidate) ? candidate : null;
+        if (found == null) {
+            String name = candidate.getFileName().toString();
+            if (!name.contains(".")) {
+                Path withExtension = candidate.resolveSibling(name + PAGE_EXTENSION);
+                if (Files.isRegularFile(withExtension)) found = withExtension;
+            }
         }
-        return null;
+        return found == null || isImportOnly(found) ? null : found;
+    }
+
+    /** Files whose name starts with {@code _} can be imported but have no URL. */
+    public static boolean isImportOnly(Path file) {
+        return file.getFileName().toString().startsWith("_");
     }
 }

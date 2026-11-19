@@ -1,0 +1,45 @@
+imports:
+header
+footer
+
+controller:
+if request.method == "POST"
+  name = form.name.strip
+  message = form.message.strip
+  if name != "" and message != ""
+    db.exec("insert into guestbook (name, message, created_at) values (?, ?, datetime('now'))", name, message)
+    redirect("/guestbook?posted=1")
+  end
+end
+
+entries = db.query("select * from guestbook order by id desc limit 50")
+count = entries.length
+posted = params.posted == "1"
+title = "Guestbook"
+
+view:
+{{> header}}
+<h1>Guestbook</h1>
+{{#if posted}}<p class="note">Thanks — your note is in the book.</p>{{/if}}
+<form class="sign" method="post" action="/guestbook">
+  <label>Name
+    <input name="name" maxlength="60" required>
+  </label>
+  <label>Message
+    <textarea name="message" rows="3" maxlength="500" required></textarea>
+  </label>
+  <button type="submit">Sign the guestbook</button>
+</form>
+{{#if count > 0}}
+<ul class="guestbook">
+{{#each entries}}
+  <li>
+    <p class="meta"><strong>{{it.name}}</strong> · {{it.created_at}}</p>
+    <p>{{it.message}}</p>
+  </li>
+{{/each}}
+</ul>
+{{else}}
+<p>No entries yet. Be the first.</p>
+{{/if}}
+{{> footer}}
