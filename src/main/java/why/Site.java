@@ -1,10 +1,13 @@
 package why;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Set;
+
+import why.lang.Db;
 
 /**
  * A folder of pages, and the rules for turning a request path into a file inside it.
@@ -32,6 +35,33 @@ public final class Site {
     public Site(Path root, Path dbFile) {
         this.root = root.toAbsolutePath().normalize();
         this.dbFile = dbFile.toAbsolutePath().normalize();
+    }
+
+    /**
+     * Extracts a site packaged by the Why Gradle plugin into a temporary folder.
+     * The default database lives beside the extracted pages; pass a file to
+     * {@link #fromClasspath(ClassLoader, Path)} to keep data across restarts.
+     */
+    public static Site fromClasspath() throws IOException {
+        ClassLoader loader = Thread.currentThread().getContextClassLoader();
+        return fromClasspath(loader == null ? Site.class.getClassLoader() : loader, null);
+    }
+
+    /** Extracts a packaged site using an explicit class loader and optional database file. */
+    public static Site fromClasspath(ClassLoader loader, Path dbFile) throws IOException {
+        Path root = ClasspathSite.extract(loader == null ? Site.class.getClassLoader() : loader);
+        Path database = (dbFile == null ? root.resolve("data.db") : dbFile).toAbsolutePath().normalize();
+        Path schema = root.resolve("schema.sql");
+        if (!Files.exists(database) && Files.isRegularFile(schema)) {
+            Path parent = database.getParent();
+            if (parent != null) Files.createDirectories(parent);
+            try {
+                Db.applyScript(database, Files.readString(schema, StandardCharsets.UTF_8));
+            } catch (RuntimeException e) {
+                throw new IOException("could not apply schema.sql: " + e.getMessage(), e);
+            }
+        }
+        return new Site(root, database);
     }
 
     public Path root() {

@@ -47,8 +47,9 @@
         <h2 id="requirements">Requirements</h2>
         <ul>
           <li><strong>JDK 21 or newer</strong> — the language, server and build all target 21.</li>
-          <li><strong>Maven 3.9+</strong> — to build the shaded jar.</li>
+          <li><strong>Maven 3.9+</strong> — to build the shaded CLI jar. The repository also includes a Gradle build for the <code>why</code> library and Gradle plugin.</li>
         </ul>
+        <p>Using Why from a Java library or Gradle project is a separate path: the <code>why</code> plugin packages <code>src/why</code> and exposes <code>Site.fromClasspath()</code>. See the <a href="https://github.com/slayyyyer/why-lang#gradle-plugin">Gradle plugin section</a> in the README.</p>
         <p>Check what you have:</p>
         <div class="code"><div class="code-title">terminal</div><pre><code>java -version
 mvn -version</code></pre></div>

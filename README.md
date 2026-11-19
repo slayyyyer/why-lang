@@ -9,7 +9,7 @@ step, no framework boilerplate.
 
 > Named in tribute to _why the lucky stiff_, whose tiny, whimsical tools (Camping, Shoes, *Why's (Poignant) Guide to Ruby*) made programming feel like play.
 
-Requires JDK 21+ and Maven 3.9+ on `PATH`:
+Requires JDK 21+. Build the CLI with Maven 3.9+ (the included Gradle wrapper builds the library and plugin):
 
 ```bash
 mvn package
@@ -30,6 +30,91 @@ java -jar target/why.jar check ./site
 `check` reports unresolved imports and partials, duplicate `def`s, undefined function calls and URL
 collisions, then prints a page map. It exits 1 when it finds anything and does not touch the
 database.
+
+## Gradle plugin
+
+The repository is also a Gradle build and provides the `why` plugin for Java projects. Put pages and
+assets in `src/why`:
+
+```
+src/why/index.why
+src/why/style.css
+```
+
+Then apply the plugin in `build.gradle.kts`:
+
+```kotlin
+plugins {
+    id("why") version "0.1.0"
+}
+```
+
+The plugin applies `java-library`, adds the Why runtime (`why:why-lang:0.1.0`) as an `api`
+dependency, copies `src/why` into the jar at `META-INF/why-site`, and writes a sorted
+`META-INF/why-site.index`. It adds:
+
+- `./gradlew whyRun` — serve `src/why`; `whyCheck` is wired into `check`.
+- `./gradlew whyCheck` — compile every page and print the page map.
+- `./gradlew jar` — package pages and assets as classpath resources.
+
+The `why` extension overrides the defaults:
+
+```kotlin
+why {
+    siteDir.set(layout.projectDirectory.dir("src/why"))
+    host.set("127.0.0.1")
+    port.set(8080)
+    diagnostics.set(true)       // --dev for whyRun
+    secureCookies.set(false)
+    databaseFile.set(layout.projectDirectory.file("data.db"))
+}
+```
+
+`whyRun` uses the CLI default database, `src/why/data.db`, unless `databaseFile` is set. Database
+files and their journals (`*.db`, `*.db-journal`, `*.db-wal`, `*.db-shm`) are excluded from the jar
+and index; set `databaseFile` outside `src/why` to keep development data out of the source tree.
+
+Serve a packaged site from Java, including from a library jar on the classpath:
+
+```java
+Site site = Site.fromClasspath();                 // or Site.fromClasspath(loader, dbFile)
+WhyServer server = new WhyServer(site, 8080);
+server.start();
+```
+
+`Site.fromClasspath()` extracts the indexed resources to a temporary folder and bootstraps
+`schema.sql` when the database does not exist. Pass an explicit `dbFile` to keep data across
+restarts. Resources from multiple jars merge when their page names differ; a duplicate path is an
+error.
+
+For local use, publish the runtime and plugin to the Maven local repository before applying the
+plugin from a consumer project:
+
+```bash
+./gradlew publishToMavenLocal
+```
+
+Add `mavenLocal()` to both `pluginManagement` repositories in the consumer's `settings.gradle.kts`
+(so the plugin marker resolves) and the project `repositories` block (so `why:why-lang` resolves):
+
+```kotlin
+// settings.gradle.kts
+pluginManagement {
+    repositories {
+        mavenLocal()
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+```
+
+```kotlin
+// build.gradle.kts
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+```
 
 ## Website
 
@@ -280,15 +365,17 @@ script is applied once so a site folder is self-contained.
 ## Project layout
 
 ```
-pom.xml
+pom.xml, build.gradle.kts, settings.gradle.kts, gradlew
 site/                      demo site: pages, partials, CSS, schema.sql
 docs/                      project site, published to GitHub Pages
+why-gradle-plugin/         the `why` Gradle plugin and its TestKit tests
 .github/workflows/ci.yml     tests and demo site check
 .github/workflows/pages.yml  GitHub Pages publishing
 src/main/java/why/
   Main.java                CLI
   WhyServer.java           HTTP handler, errors, static files
   Site.java                the .why extension and URL → file resolution
+  ClasspathSite.java       extraction for sites packaged by the Gradle plugin
   PageLoader.java          imports/controller/view section splitting
   PageCompiler.java        import resolution and parsing
   Program.java             a parsed page
