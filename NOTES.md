@@ -67,12 +67,9 @@ The specification I was given ends in the middle of the `imports:` rules, so the
 
 ## Open questions
 
-- **Language drift.** The shipped direction is the Ruby-shaped language: `do |x| ... end` blocks,
-  `unless`, `elsif`, `while`/`break`, and `&&`/`||` are implemented, tested and documented. The
-  earlier simplification (`{ }` blocks with implicit `it`, no `unless`/`elsif`/`while`) was not
-  carried through. Why this direction: the parser, interpreter, tests and examples already follow
-  the Ruby forms, so changing them would be a language change; no explicit design rationale for
-  rejecting the simplification is recorded. This needs a deliberate decision.
+- **Language drift.** Resolved: the Ruby-shaped language is the decision, recorded in
+  [docs/decisions/0001-language-direction.md](docs/decisions/0001-language-direction.md). The
+  `{ }`-block simplification is rejected rather than deferred.
 - **Custom block helpers.** Not supported today. Template blocks are limited to `if`, `unless` and
   `each`; an unknown `{{#name}}` is an error. A user `def` can receive a language block
   (`do |x| ... end`), but template blocks and language blocks are separate concepts. Whether to

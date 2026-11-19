@@ -9,7 +9,7 @@ repository.
 
 ## Before another release ships
 
-### [ ] 1. One source of truth for the version
+### [x] 1. One source of truth for the version
 
 The version is hardcoded in four places, not the three `RELEASING.md` names:
 `build.gradle.kts`, `why-gradle-plugin/build.gradle.kts`, `pom.xml`, and
@@ -21,7 +21,7 @@ Why: cheap to fix, and the failure mode is invisible until a consumer reports a 
 Done when the Gradle builds read one version, the plugin's runtime coordinate is derived rather
 than typed, and a check fails the build when `pom.xml` drifts from it.
 
-### [ ] 2. Publish the plugin to the Gradle Plugin Portal
+### [!] 2. Publish the plugin to the Gradle Plugin Portal
 
 Today every install needs the two-repository explanation, including the note that the marker is not
 on the Plugin Portal. That is the least idiomatic paragraph in the docs and the first thing a Gradle
@@ -33,7 +33,7 @@ Why: the default `plugins { id("io.github.slayyyyer.why") version "…" }` resol
 Done when `./gradlew publishPlugins` is configured and documented, and the install page no longer
 requires a repository block for the plugin marker.
 
-### [ ] 3. Finish the `response` object
+### [x] 3. Finish the `response` object
 
 `Response` has one method, `csp`, while `FRICTION.md` #1 still says a page cannot set a status or a
 header.
@@ -44,7 +44,7 @@ abstraction that already exists.
 
 Done when a page can set a status, set a header, and answer JSON without hand-building a string.
 
-### [ ] 4. CSRF tokens and a form contract
+### [x] 4. CSRF tokens and a form contract
 
 `FRICTION.md` #10 and #4 are the two things between "demo" and "anyone may deploy a form".
 
@@ -55,7 +55,7 @@ every page invents.
 Done when a POST without a valid token is rejected, the token survives a request without a
 database, and the demo guestbook and recipes use it.
 
-### [ ] 5. Migrations
+### [x] 5. Migrations
 
 `schema.sql` runs only when the database file is missing, so adding a table means deleting
 everyone's data (`FRICTION.md` #8).
@@ -65,7 +65,7 @@ Why: it is the first thing any real deployment needs on day two.
 Done when ordered SQL files in `migrations/` apply once each, tracked in a `schema_migrations`
 table, and existing databases upgrade in place.
 
-### [ ] 6. SQLite WAL and `busy_timeout`
+### [x] 6. SQLite WAL and `busy_timeout`
 
 No pragma is set anywhere. One connection per request with the default rollback journal means two
 simultaneous writers fail with `database is locked`, which surfaces as a 500 (`FRICTION.md` #6).
@@ -77,7 +77,7 @@ transaction open and expects the second writer to wait rather than fail.
 
 ## New audiences
 
-### [ ] 7. A non-Gradle install path
+### [x] 7. A non-Gradle install path
 
 The hero says "Drop a file. Hit its URL." The documented path says "first create a Gradle project
 with two repository blocks."
@@ -87,7 +87,7 @@ meeting Gradle, which is the price of admission for a page language.
 
 Done when `why new mysite` writes a working project and a launcher runs a site from a folder.
 
-### [ ] 8. `why test`: a page harness
+### [x] 8. `why test`: a page harness
 
 Write paths are only testable over HTTP (`FRICTION.md` #12), so they sit outside the fast loop.
 
@@ -97,7 +97,7 @@ gives the page model a story that Sinatra-plus-ERB tutorials do not have.
 Done when a consumer test can boot a site, issue GET/POST and assert status, headers and body in a
 few lines.
 
-### [ ] 9. Editor support
+### [x] 9. Editor support
 
 Every `.why` file is currently grey text in every editor.
 
@@ -107,7 +107,7 @@ tutorial credible, and it is a weekend of grammar work.
 Done when a VS Code extension and a TextMate grammar highlight sections, strings, interpolation,
 mustaches and Ruby-shaped keywords.
 
-### [ ] 10. Static asset caching and compression
+### [x] 10. Static asset caching and compression
 
 No `ETag`, no `Last-Modified`, no gzip; static files are re-read and re-sent in full.
 
@@ -119,7 +119,7 @@ client asks.
 
 ## Paying down what 0.1.0 exposed
 
-### [ ] 11. One source for the language reference
+### [x] 11. One source for the language reference
 
 The reference is restated in `README.md`, `docs/usage.html`, `docs/why.html`, `docs/recipes.html`
 and `docs/install.html`. Changing paths meant editing four of them by hand.
@@ -129,7 +129,7 @@ Why: drift is now a certainty. The next language change means five coordinated e
 Done when the site's reference is generated from one source, or a check fails when the copies
 disagree.
 
-### [ ] 12. A deploy recipe
+### [x] 12. A deploy recipe
 
 `SECURITY.md` tells people to run Why behind a reverse proxy as a service account, but the
 repository ships nothing for that, and `server.stop()` on SIGTERM calls `HttpServer.stop(0)`, which
@@ -149,7 +149,7 @@ removes both and matters for read-only container filesystems.
 
 Done when a packaged site serves with no temporary directory.
 
-### [ ] 14. Published Javadoc
+### [x] 14. Published Javadoc
 
 The Javadoc jar exists, but the embeddable API is documented only in prose.
 
@@ -160,7 +160,7 @@ Done when the Pages build publishes Javadoc under `docs/api`.
 
 ## The language's next headline
 
-### [ ] 15. Custom template helpers, block-call syntax, and the drift decision
+### [~] 15. Custom template helpers, block-call syntax, and the drift decision
 
 `NOTES.md` records that `{{#if}}`, `{{#unless}}` and `{{#each}}` are the only blocks, that a `def`
 can receive a language block but a template cannot call it, and that there is no `yield` or
@@ -172,6 +172,19 @@ as accidental.
 
 Done when a page-defined helper can render a template block, and the drift decision is written
 down.
+
+## Where this pass left off
+
+- Item 2 is configured (`com.gradle.plugin-publish` 1.3.0, website and VCS URLs) but cannot be
+  published from here: `publishPlugins` needs `GRADLE_PUBLISH_KEY` and `GRADLE_PUBLISH_SECRET`.
+- Item 7 ships `why new` and `bin/why`/`bin/why.cmd`; a published standalone CLI jar is still the
+  missing piece, so the launcher needs `mvn package` or a `WHY_JAR` path.
+- Item 11 took the second half of its "done when": `tools/check-docs.mjs` fails when the README and
+  the site disagree. Generation from one source is still open.
+- Item 13 is untouched. `Site` is path-based throughout (`PageLoader`, `PageCompiler`, `WhyServer`),
+  so serving from a jar without extraction is an architectural change, not a patch.
+- Item 15 records the language decision in `docs/decisions/0001-language-direction.md`. Custom
+  template blocks are still deferred; they need a first-class block value and a `yield`-style call.
 
 ## Deliberately not yet
 

@@ -22,6 +22,9 @@ jobs:
           java-version: "21"
           cache: maven
 
+      - name: Check the docs stay in sync
+        run: node tools/check-docs.mjs
+
       - name: Run tests and build the jar
         run: mvn -B verify
 

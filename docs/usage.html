@@ -36,6 +36,7 @@
         <a href="#request">Request globals</a>
         <a href="#database">The database</a>
         <a href="#responses">Responses and flash</a>
+        <a href="#forms">Forms</a>
         <a href="#not-yet">Not yet</a>
         <a href="#cli">The command line</a>
         <a href="#errors">Errors</a>
@@ -177,7 +178,8 @@ end</code></pre></div>
               <tr><td><code>form</code></td><td>Fields from an <code>application/x-www-form-urlencoded</code> POST body, empty on GET. Bodies are capped at 64 KiB; multipart is not read.</td></tr>
               <tr><td><code>request</code></td><td>A hash with <code>method</code>, <code>path</code>, <code>query</code>, <code>params</code> and <code>form</code>.</td></tr>
               <tr><td><code>flash</code></td><td>One-shot messages carried to the next page request. <code>flash.set("notice", "…")</code>; read with <code>{{flash.notice}}</code> or <code>flash.get("notice")</code>.</td></tr>
-              <tr><td><code>response</code></td><td>Response controls. <code>response.csp("default-src 'self'")</code> opts this page into a Content-Security-Policy.</td></tr>
+              <tr><td><code>csrf</code></td><td><code>csrf.token</code>, a per-browser secret for form posts. It rides an HttpOnly <code>why_csrf</code> cookie, so it survives a restart and needs no server-side state. A POST without the matching <code>_token</code> field is rejected with 403.</td></tr>
+              <tr><td><code>response</code></td><td>Response controls: <code>response.status(201)</code>, <code>response.header("X-Why", "…")</code>, <code>response.json(hash)</code> and <code>response.csp("…")</code>.</td></tr>
             </tbody>
           </table>
         </div>
@@ -188,7 +190,8 @@ end</code></pre></div>
         <div class="code"><div class="code-title">queries and writes</div><pre><code>posts = db.query("select * from posts order by id desc")
 post  = db.get("select * from posts where id = ?", id)
 n     = db.exec("insert into posts (title) values (?)", title)</code></pre></div>
-        <p>Rows are hashes keyed by column label, so <code>{{it.title}}</code> and <code>post.title</code> work. A query is capped at 10,000 rows and 4 MiB of column labels and values; a larger result raises a page error instead of loading without bound. If <code>data.db</code> does not exist when the server starts and <code>schema.sql</code> exists, the script runs once. There is no migration runner: changing the schema of an existing database is on you.</p>
+        <p>Rows are hashes keyed by column label, so <code>{{it.title}}</code> and <code>post.title</code> work. A query is capped at 10,000 rows and 4 MiB of column labels and values; a larger result raises a page error instead of loading without bound. If <code>data.db</code> does not exist and <code>schema.sql</code> exists, the script runs once.</p>
+        <p>A <code>migrations/</code> folder takes over the schema: every <code>.sql</code> file in it applies once, in filename order, each in its own transaction, recorded in a <code>schema_migrations</code> table. A fresh database runs them in order; an existing one applies only what is pending, so schema changes upgrade in place.</p>
 
         <h2 id="responses">Responses and flash</h2>
         <p><code>redirect("/path")</code> stops the page and answers <code>303 See Other</code>. The target must be a path-absolute same-origin path; absolute URLs and protocol-relative locations are rejected.</p>
@@ -206,6 +209,28 @@ end
 # view
 {{#if flash.notice}}&lt;p class="note"&gt;{{flash.notice}}&lt;/p&gt;{{/if}}</code></pre></div>
         <p>The flash is stored in a bounded, expiring in-memory store, keyed by a server-issued <code>why_session</code> cookie. The cookie is <code>HttpOnly</code> and <code>SameSite=Lax</code>; add <code>--secure-cookies</code> behind TLS. A single flash value is capped at 4 KiB. A message is available on the next page request and gone after that. Restarting the server drops pending messages; there is no longer-lived session.</p>
+        <p><code>response</code> also sets a status or header and can answer JSON instead of the view:</p>
+        <div class="code"><div class="code-title">controller</div><pre><code>response.status(201)
+response.header("X-Why", "created")
+response.json({ok: true, count: 2})</code></pre></div>
+        <p><code>response.json</code> writes the value as JSON and ignores the rendered view. <code>response.header</code> refuses the headers the server owns (<code>Content-Length</code>, <code>Set-Cookie</code> and friends) and any value that is not one line.</p>
+
+        <h3 id="forms">Forms</h3>
+        <p>A write page gets a CSRF token and a validator, so a form needs no framework:</p>
+        <div class="code"><div class="code-title">controller + view</div><pre><code># controller
+errors = validate(form, {name: "required", message: "required,min:3"})
+if request.method == "POST" and errors.length == 0
+  db.exec("insert into guestbook (name, message) values (?, ?)", form.name, form.message)
+  redirect("/guestbook")
+end
+
+# view
+&lt;form method="post"&gt;
+  &lt;input type="hidden" name="_token" value="{{csrf.token}}"&gt;
+  &lt;input name="name" value="{{form.name}}"&gt;
+  {{#if errors.name}}&lt;p class="error"&gt;{{errors.name}}&lt;/p&gt;{{/if}}
+&lt;/form&gt;</code></pre></div>
+        <p><code>validate</code> returns a hash of field to message, empty when everything passes; rules are comma-separated <code>required</code>, <code>min:N</code> and <code>max:N</code>. <code>form</code> still holds the submitted values on the error path. A form POST without the token is rejected with 403 before the page runs.</p>
         <ul>
           <li>Unknown paths answer 404.</li>
           <li>POST to a static file answers 405.</li>
@@ -217,8 +242,8 @@ end
         <ul>
           <li><strong>Long-lived sessions.</strong> Only the one-shot flash survives across a redirect.</li>
           <li><strong>A cookies API.</strong> The <code>why_session</code> cookie is internal to flash; pages cannot read or set cookies.</li>
-          <li><strong><code>json</code>, <code>env</code>, and <code>log</code> helpers.</strong> None of these exists.</li>
-          <li><strong>Custom response headers or status codes.</strong> <code>response.csp(...)</code> is the only header control and <code>redirect(path)</code> is the only explicit status; it always answers <code>303 See Other</code>.</li>
+          <li><strong><code>env</code> and <code>log</code> helpers.</strong> Neither exists.</li>
+          <li><strong>Cookies beyond the two the server issues.</strong> Pages cannot read or set arbitrary cookies.</li>
           <li><strong>Multipart forms or uploads.</strong> Only <code>application/x-www-form-urlencoded</code> bodies are read.</li>
         </ul>
         <p>Custom block helpers are also not supported yet; see <a href="#views">Views</a>.</p>

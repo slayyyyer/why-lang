@@ -83,6 +83,9 @@ repositories {
         <p>A file with no section labels is all view, so plain HTML is already a valid page. Start it:</p>
         <div class="code"><div class="code-title">terminal</div><pre><code>./gradlew whyRun</code></pre></div>
         <p>Open <code>http://localhost:8080/</code>. Add <code>about.why</code> next to it and <code>/about</code> exists immediately. Copy a file in, refresh, it is live — every request re-reads and reparses the page.</p>
+        <div class="callout">
+          <p><strong>No Gradle project yet?</strong> <code>why new mysite</code> writes a runnable folder of pages and prints the command that serves it; the repository's <code>bin/why</code> launcher runs the CLI jar, and <code>deploy/</code> carries a container recipe.</p>
+        </div>
 
         <h2 id="tasks">Run, check, package</h2>
         <div class="table-wrap">

@@ -53,6 +53,20 @@ reports unresolved imports and partials, duplicate `def`s, undefined function ca
 collisions, then prints a page map. It exits 1 when it finds anything and does not touch the
 database.
 
+## Without Gradle
+
+A folder of pages needs no project. `why new` writes a starter site and `bin/why` runs the CLI jar:
+
+```bash
+mvn package
+./bin/why new mysite
+./bin/why mysite
+```
+
+`bin/why` uses `target/why.jar` unless `WHY_JAR` points at another copy; `bin/why.cmd` is the
+Windows launcher. `why new` writes pages, a stylesheet and a `schema.sql`, and refuses a folder that
+is not empty.
+
 ## Gradle plugin
 
 The plugin targets Java projects. Put pages and assets in `src/why`:
@@ -99,6 +113,18 @@ server.start();
 `schema.sql` when the database does not exist. Pass an explicit `dbFile` to keep data across
 restarts. Resources from multiple jars merge when their page names differ; a duplicate path is an
 error.
+
+## Testing a site
+
+`why.testing.TestServer` boots a site in process on a free port, does not follow redirects, and
+submits the CSRF token, so a write page is an ordinary JUnit test:
+
+```java
+try (TestServer server = TestServer.start(Path.of("src/why"))) {
+    assertEquals(200, server.get("/").status());
+    assertEquals(303, server.post("/guestbook", Map.of("name", "why")).status());
+}
+```
 
 ## From source
 
@@ -176,7 +202,8 @@ For an exposed deployment:
 - keep the default security headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
   `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY`
 
-See [SECURITY.md](SECURITY.md) for the full security policy and deployment checklist.
+See [SECURITY.md](SECURITY.md) for the full security policy and deployment checklist, and
+[deploy/](deploy/README.md) for the container and systemd recipes.
 
 ## M0 — the shell
 
@@ -320,7 +347,7 @@ Built-in methods:
   `each`/`map`/`select` with a block
 - Hashes: `keys`, `values`, `length`/`size`, `has_key?`, `each` with a block
 - Numbers: `to_i`, `to_f`, `abs`, `round`
-- Functions: `str(x)`, `int(x)`, `float(x)`, `redirect(path)`
+- Functions: `str(x)`, `int(x)`, `float(x)`, `redirect(path)`, `validate(form, rules)`
 
 ## Views
 
@@ -362,8 +389,12 @@ n     = db.exec("insert into posts (title) values (?)", title)
 Rows are hashes keyed by column label, so `{{it.title}}` and `post.title` work. Arguments are
 bound as prepared-statement parameters.
 
-If the database file does not exist when the server starts and `<site>/schema.sql` exists, the
-script is applied once so a site folder is self-contained.
+If the database file does not exist, `<site>/schema.sql` is applied once so a site folder is
+self-contained. A `migrations/` folder takes over the schema: every `.sql` file in it applies once,
+in filename order, each in its own transaction, recorded in a `schema_migrations` table. A fresh
+database runs them in order; an existing one applies only what is pending. The first migration
+added to a database created by `schema.sql` should therefore be written against that schema with
+`create table if not exists`, or the baseline row inserted into `schema_migrations`.
 
 ## Request globals
 
@@ -375,15 +406,55 @@ script is applied once so a site folder is self-contained.
   request, where `{{flash.notice}}` can read it; the request after that no longer has it. Messages
   live in a bounded, expiring in-memory store keyed by a server-issued `why_session` cookie;
   restarting the server drops them.
+- `csrf` — `csrf.token`, a per-browser secret for form posts. It rides an HttpOnly `why_csrf`
+  cookie, so it survives a restart and needs no server-side state. A POST without the matching
+  `_token` field is rejected with 403.
 
 ## Responses
 
-`redirect("/path")` answers `303 See Other`. `response.csp("default-src 'self'")` opts a page into
-a Content-Security-Policy; the default `frame-ancestors 'none'` is appended unless the policy sets
-its own. The policy must be printable ASCII on one line.
+`redirect("/path")` answers `303 See Other`. A page controls the rest through `response`:
+
+```ruby
+response.status(201)                      # 200-599; defaults to 200
+response.header("X-Why", "created")
+response.json({ok: true, count: 2})       # answers JSON and ignores the rendered view
+response.csp("default-src 'self'")        # opt into a policy
+```
+
+`response.header` refuses the headers the server owns (`Content-Length`, `Set-Cookie` and friends)
+and any value that is not one line of printable ASCII. The default `frame-ancestors 'none'` is
+appended unless the policy sets its own.
 
 Every response also carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
-`Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY`.
+`Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options: DENY` and an `X-Request-Id`
+that also starts the request log line. `/health` answers `200 ok` without parsing a page, and
+`SIGTERM` drains in-flight requests for up to five seconds.
+
+## Forms
+
+Two things make a write page safe without a framework: a CSRF token and a validator.
+
+```ruby
+controller:
+errors = validate(form, {name: "required", message: "required,min:3"})
+if request.method == "POST" and errors.length == 0
+  db.exec("insert into guestbook (name, message) values (?, ?)", form.name, form.message)
+  redirect("/guestbook")
+end
+
+view:
+<form method="post">
+  <input type="hidden" name="_token" value="{{csrf.token}}">
+  <input name="name" value="{{form.name}}">
+  {{#if errors.name}}<p class="error">{{errors.name}}</p>{{/if}}
+  <button>Sign</button>
+</form>
+```
+
+`validate` returns a hash of field to message, empty when everything passes; rules are
+comma-separated `required`, `min:N` and `max:N`. `form` still holds the submitted values on the
+error path, so `value="{{form.name}}"` re-populates the form. A form POST without the token is
+rejected with 403 before the page runs.
 
 ## Project layout
 
@@ -392,6 +463,10 @@ pom.xml, build.gradle.kts, settings.gradle.kts, gradlew
 site/                      demo site: pages, partials, CSS, schema.sql
 docs/                      project site, published to GitHub Pages
 why-gradle-plugin/         the `io.github.slayyyyer.why` plugin and its TestKit tests
+deploy/                    Dockerfile, systemd unit and reverse-proxy notes
+editors/vscode/            TextMate grammar and VS Code extension
+tools/check-docs.mjs       fails when the README and site copies drift
+roadmap.md                 ranked follow-ups after 0.1.0
 .github/workflows/ci.yml     tests and demo site check
 .github/workflows/pages.yml  GitHub Pages publishing
 src/main/java/why/

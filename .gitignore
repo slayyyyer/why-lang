@@ -6,3 +6,4 @@ build/
 *.db-journal
 .idea/
 *.iml
+docs/api/

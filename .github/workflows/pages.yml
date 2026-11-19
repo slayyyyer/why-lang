@@ -30,6 +30,18 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build the API reference
+        run: |
+          ./gradlew --no-daemon javadoc
+          mkdir -p docs/api
+          cp -r build/docs/javadoc/. docs/api/
+
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
