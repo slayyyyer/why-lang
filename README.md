@@ -23,6 +23,27 @@ java -jar target/why.jar check ./site
 collisions, then prints a page map. It exits 1 when it finds anything and does not touch the
 database.
 
+## Website
+
+The project site lives in `docs/` as plain HTML/CSS with no build step. Pushes to `main` that touch
+`docs/` or `.github/workflows/pages.yml` publish it to GitHub Pages. In the repository settings,
+set **Pages → Build and deployment → Source** to **GitHub Actions**.
+
+Preview it locally with the JDK's built-in static server. On this Windows machine (Git Bash), `-d`
+needs an absolute path:
+
+```bash
+.tools/jdk/bin/jwebserver -p 4000 -d "$(cygpath -m "$PWD/docs")"
+```
+
+`jwebserver` rejects a relative `-d` path on every OS. To avoid paths entirely, change into the
+folder and let it use its default directory — with the JDK on your `PATH`:
+
+```bash
+cd docs
+jwebserver -p 4000
+```
+
 This working copy has no system-wide Java or Maven, so it carries a portable toolchain in the
 gitignored `.tools/` folder. The same build from this folder:
 
@@ -66,6 +87,8 @@ a proof of concept, not a production runtime.
 - `form` — fields from an `application/x-www-form-urlencoded` POST body (empty on GET); also
   `request.form`
 - `redirect(path)` — stop the page and answer `303 See Other` with `Location: path`
+- `flash` — one-shot messages carried across the redirect: `flash.set("notice", "…")`, then
+  `{{flash.notice}}` on the next page request
 
 The page-model friction found while building it is logged in [FRICTION.md](FRICTION.md).
 
@@ -217,12 +240,17 @@ script is applied once so a site folder is self-contained.
 - `form` — POSTed form fields as strings, empty on GET. Only `application/x-www-form-urlencoded`
   bodies are read (64 KiB cap).
 - `request` — a hash with `method`, `path`, `query`, `params` and `form`.
+- `flash` — one-shot messages. `flash.set("notice", "…")` stores a value for the next page
+  request, where `{{flash.notice}}` can read it; the request after that no longer has it. Messages
+  live in memory, keyed by a `why_session` cookie, so restarting the server drops them.
 
 ## Project layout
 
 ```
 pom.xml
 site/                      demo site: pages, partials, CSS, schema.sql
+docs/                      project site, published to GitHub Pages
+.github/workflows/pages.yml
 src/main/java/why/
   Main.java                CLI
   WhyServer.java           HTTP handler, errors, static files

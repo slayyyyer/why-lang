@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install Why — build the jar and run a first page</title>
+<meta name="description" content="Requirements, build, run, first page, CLI options, SQLite schema bootstrap, check command and troubleshooting for Why.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="Why home"><span class="mark">W</span><span>why</span></a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="usage.html">Using</a>
+      <a href="why.html">Why</a>
+      <a href="install.html" aria-current="page">Install</a>
+      <a href="recipes.html">Recipes</a>
+      <a class="gh" href="https://github.com/slayyyyer/why-lang">GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap docs">
+    <div class="docs-grid">
+      <nav class="toc" aria-label="On this page">
+        <p class="toc-title">On this page</p>
+        <a href="#requirements">Requirements</a>
+        <a href="#build">Build and run</a>
+        <a href="#first">A first page</a>
+        <a href="#options">Options</a>
+        <a href="#database">The database</a>
+        <a href="#check">Check a site</a>
+        <a href="#deploy">Running it somewhere</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+      </nav>
+
+      <article>
+        <p class="eyebrow">Install</p>
+        <h1>From clone to a running page.</h1>
+        <p class="lead">Why builds to one jar. Point it at a folder, open the URL, edit the file, refresh. There is no separate asset pipeline or database server to start.</p>
+
+        <h2 id="requirements">Requirements</h2>
+        <ul>
+          <li><strong>JDK 21 or newer</strong> — the language, server and build all target 21.</li>
+          <li><strong>Maven 3.9+</strong> — to build the shaded jar.</li>
+        </ul>
+        <p>Check what you have:</p>
+        <div class="code"><div class="code-title">terminal</div><pre><code>java -version
+mvn -version</code></pre></div>
+
+        <h2 id="build">Build and run</h2>
+        <div class="code"><div class="code-title">terminal</div><pre><code>git clone https://github.com/slayyyyer/why-lang.git
+cd why-lang
+mvn package
+java -jar target/why.jar ./site</code></pre></div>
+        <p>The demo site starts on <code>http://localhost:8080</code>. If the port is taken, add <code>--port 3000</code>.</p>
+        <div class="callout">
+          <p><strong>One jar.</strong> The SQLite JDBC driver is shaded in. There is no runtime dependency to install beyond the JDK.</p>
+        </div>
+
+        <h2 id="first">A first page</h2>
+        <p>Make a new folder inside the project and add <code>index.why</code> in an editor:</p>
+        <div class="code"><div class="code-title">mysite/index.why</div><pre><code>&lt;h1&gt;Hello from a file&lt;/h1&gt;
+&lt;p&gt;No build step, no route table.&lt;/p&gt;</code></pre></div>
+        <p>A file with no section labels is all view, so plain HTML is already a valid page. Start the server against that folder:</p>
+        <div class="code"><div class="code-title">terminal</div><pre><code>java -jar target/why.jar ./mysite --port 3000</code></pre></div>
+        <p>Open <code>http://localhost:3000/</code>. Add <code>about.why</code> next to it and <code>/about</code> exists immediately. Copy a file in, refresh, it is live — every request re-reads and recompiles the page.</p>
+
+        <h2 id="options">Options</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>site</code></td><td>Folder of <code>.why</code> files. Default: the current directory.</td></tr>
+              <tr><td><code>-p</code>, <code>--port N</code></td><td>Port to listen on. Default: <code>8080</code>.</td></tr>
+              <tr><td><code>--db FILE</code></td><td>SQLite file. Default: <code>data.db</code> inside the site folder.</td></tr>
+              <tr><td><code>check [site]</code></td><td>Compile every page, report problems, print the page map, exit 1 on problems. Does not serve or touch the database.</td></tr>
+              <tr><td><code>-h</code>, <code>--help</code></td><td>Usage.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="database">The database</h2>
+        <p>If <code>data.db</code> is missing when the server starts and the site folder contains <code>schema.sql</code>, the script runs once. A small site can therefore be a folder you can copy anywhere.</p>
+        <div class="code"><div class="code-title">mysite/schema.sql</div><pre><code>create table if not exists notes (
+  id integer primary key,
+  body text not null,
+  created_at text not null
+);</code></pre></div>
+        <p>There is no migration runner. In development, deleting the database and letting <code>schema.sql</code> recreate it is the whole story. In anything you care about, keep the schema and migrations outside Why.</p>
+
+        <h2 id="check">Check a site</h2>
+        <p>Before serving, or in CI, compile the whole folder:</p>
+        <div class="code"><div class="code-title">terminal</div><pre><code>java -jar target/why.jar check ./mysite</code></pre></div>
+        <p>It reports unresolved imports and partials, duplicate defs, undefined free-function calls and URL collisions, then prints a page map. It exits <code>0</code> when clean and <code>1</code> when it finds something. It never opens the database.</p>
+        <p>The same jar has a <code>check</code> recipe for a CI workflow on the <a href="recipes.html#ci">recipes page</a>.</p>
+
+        <h2 id="deploy">Running it somewhere</h2>
+        <p>The artifact is <code>target/why.jar</code> plus your site folder. On a server, run it under whatever supervises processes, put it behind a reverse proxy if it is exposed, and keep backups of the SQLite file.</p>
+        <div class="callout warn">
+          <p><strong>Not production-hardened.</strong> There is no TLS, authentication, rate limiting or sandbox. Pages can run arbitrary SQL and read the database. Run it on a trusted network, or treat it as a prototype.</p>
+        </div>
+
+        <h2 id="troubleshooting">Troubleshooting</h2>
+        <h3>“Address already in use”</h3>
+        <p>Another process owns the port. Add <code>--port 3000</code> or pick another number.</p>
+        <h3>“cannot find import 'header'”</h3>
+        <p>The import is a bare name. It looks for <code>header.why</code> next to the importing page, then in the site root. Check the spelling and the folder. A leading <code>_</code> is allowed and means import-only.</p>
+        <h3><code>/_header</code> answers 404</h3>
+        <p>That is the convention: files whose name starts with <code>_</code> can be imported but are never served. Use <code>{{&gt; _header}}</code> from a page.</p>
+        <h3>I changed <code>schema.sql</code> and nothing happened</h3>
+        <p>The script only runs when the database file is missing. For the demo, stop the server, delete <code>site/data.db</code>, and start again.</p>
+        <h3>“java: command not found” or the wrong version</h3>
+        <p>Install JDK 21+ and check <code>java -version</code>. The build also needs Maven on <code>PATH</code>.</p>
+        <h3>The page is blank</h3>
+        <p>Check the server log: compile and runtime errors are printed with <code>file:line</code>, and the browser gets a 500 page with the source excerpt. <code>why check</code> catches most problems before the request.</p>
+
+        <hr>
+        <p>Next: <a href="usage.html">the language and page format</a>, or <a href="recipes.html">copy a recipe</a>.</p>
+      </article>
+    </div>
+  </div>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <a class="foot-brand" href="index.html"><span class="mark">W</span> Why — a page language for the JVM.</a>
+    <span class="foot-links">
+      <a href="https://github.com/slayyyyer/why-lang">GitHub</a>
+      <a href="https://github.com/slayyyyer/why-lang/blob/main/NOTES.md">Notes</a>
+    </span>
+  </div>
+</footer>
+
+<script src="site.js" defer></script>
+</body>
+</html>
