@@ -32,16 +32,16 @@
         <h1>Drop a file.<br>Hit its URL.<br><em>It runs.</em></h1>
         <p class="lede">Why is a small page language for the JVM. A page is a <code>.why</code> file in a folder; the server parses it on request. Controller and view are separate sections, and SQLite data access is built in. No router, no build step, no framework — one jar and a directory.</p>
         <div class="actions">
-          <a class="btn" href="install.html">Install in two commands</a>
+          <a class="btn" href="install.html">Add to a Gradle build</a>
           <a class="btn ghost" href="usage.html">Read the language</a>
         </div>
-        <p class="hero-meta"><span>JDK 21+</span><span>single jar</span><span>SQLite built in</span><span>one folder</span></p>
+        <p class="hero-meta"><span>JDK 21+</span><span>Maven Central</span><span>Gradle plugin</span><span>SQLite built in</span></p>
       </div>
 
       <div class="demo" role="group" aria-label="A Why page and its rendered output">
         <div class="demo-grid">
           <div class="demo-pane">
-            <div class="demo-label"><span>site/index.why</span><span>page</span></div>
+            <div class="demo-label"><span>src/why/index.why</span><span>page</span></div>
             <pre><code>imports:
 header
 footer
@@ -114,7 +114,7 @@ view:
         <div class="feature">
           <span class="num">06</span>
           <h3>Check before you serve</h3>
-          <p><code>why check</code> parses and checks every page, reports imports, partials, duplicate defs, undefined calls and URL collisions, then prints a page map.</p>
+          <p><code>./gradlew whyCheck</code> parses and checks every page, reports imports, partials, duplicate defs, undefined calls and URL collisions, then prints a page map. It runs as part of <code>check</code>.</p>
         </div>
       </div>
 
@@ -128,8 +128,8 @@ view:
     <div class="wrap">
       <div class="cta-box">
         <div>
-          <h2>Two commands to a running page.</h2>
-          <p>JDK 21 and Maven, then build the jar and point it at a folder. The demo site is included.</p>
+          <h2>Two lines to a running page.</h2>
+          <p>Apply the plugin, drop a page under <code>src/why</code>, run <code>./gradlew whyRun</code>. JDK 21 is the only thing to install.</p>
         </div>
         <div class="cta-actions">
           <a class="btn light" href="install.html">Install Why</a>

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Install Why — build the jar and run a first page</title>
-<meta name="description" content="Requirements, build, run, first page, CLI options, SQLite schema bootstrap, check command and troubleshooting for Why.">
+<title>Install Why — add the Gradle plugin and run a first page</title>
+<meta name="description" content="Add the io.github.slayyyyer.why Gradle plugin from Maven Central, put pages in src/why, and run them with whyRun. Plus embedding, the CLI jar, and SQLite schema bootstrap.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -30,57 +30,118 @@
       <nav class="toc" aria-label="On this page">
         <p class="toc-title">On this page</p>
         <a href="#requirements">Requirements</a>
-        <a href="#build">Build and run</a>
+        <a href="#gradle">Add to Gradle</a>
         <a href="#first">A first page</a>
-        <a href="#options">Options</a>
+        <a href="#tasks">Run, check, package</a>
+        <a href="#configure">Configure</a>
+        <a href="#embed">Embed in Java</a>
+        <a href="#source">From source</a>
+        <a href="#options">CLI options</a>
         <a href="#database">The database</a>
-        <a href="#check">Check a site</a>
         <a href="#deploy">Running it somewhere</a>
         <a href="#troubleshooting">Troubleshooting</a>
       </nav>
 
       <article>
         <p class="eyebrow">Install</p>
-        <h1>From clone to a running page.</h1>
-        <p class="lead">Why builds to one jar. Point it at a folder, open the URL, edit the file, refresh. There is no separate asset pipeline or database server to start.</p>
+        <h1>Two lines, then a page.</h1>
+        <p class="lead">The <code>io.github.slayyyyer.why</code> Gradle plugin is on Maven Central. It packages <code>src/why</code> into your jar and gives you <code>whyRun</code> and <code>whyCheck</code>. There is no separate asset pipeline or database server to start.</p>
 
         <h2 id="requirements">Requirements</h2>
         <ul>
           <li><strong>JDK 21 or newer</strong> — the language, server and build all target 21.</li>
-          <li><strong>Maven 3.9+</strong> — to build the shaded CLI jar. The repository also includes a Gradle build for the <code>why</code> library and Gradle plugin.</li>
+          <li><strong>Gradle 8.5 or newer</strong> — the repository's wrapper pins 8.14.3, so <code>./gradlew</code> is enough.</li>
         </ul>
-        <p>Using Why from a Java library or Gradle project is a separate path: the <code>why</code> plugin packages <code>src/why</code> and exposes <code>Site.fromClasspath()</code>. See the <a href="https://github.com/slayyyyer/why-lang#gradle-plugin">Gradle plugin section</a> in the README.</p>
         <p>Check what you have:</p>
         <div class="code"><div class="code-title">terminal</div><pre><code>java -version
-mvn -version</code></pre></div>
+./gradlew --version</code></pre></div>
 
-        <h2 id="build">Build and run</h2>
+        <h2 id="gradle">Add to Gradle</h2>
+        <p>The plugin marker and the runtime are both on Maven Central, so list it for plugins and for dependencies. In <code>settings.gradle.kts</code>:</p>
+        <div class="code"><div class="code-title">settings.gradle.kts</div><pre><code>pluginManagement {
+    repositories {
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}</code></pre></div>
+        <p>Then apply the plugin and declare the repository it resolves the runtime from:</p>
+        <div class="code"><div class="code-title">build.gradle.kts</div><pre><code>plugins {
+    id("io.github.slayyyyer.why") version "0.1.0"
+}
+
+repositories {
+    mavenCentral()
+}</code></pre></div>
+        <div class="callout">
+          <p><strong>Two repositories, two jobs.</strong> <code>pluginManagement</code> resolves the plugin marker; <code>repositories</code> resolves <code>io.github.slayyyyer:why-lang</code>, which the plugin adds as an <code>api</code> dependency.</p>
+        </div>
+
+        <h2 id="first">A first page</h2>
+        <p>Pages live in <code>src/why</code>. Make the folder and add <code>index.why</code> in an editor:</p>
+        <div class="code"><div class="code-title">src/why/index.why</div><pre><code>&lt;h1&gt;Hello from a file&lt;/h1&gt;
+&lt;p&gt;No build step, no route table.&lt;/p&gt;</code></pre></div>
+        <p>A file with no section labels is all view, so plain HTML is already a valid page. Start it:</p>
+        <div class="code"><div class="code-title">terminal</div><pre><code>./gradlew whyRun</code></pre></div>
+        <p>Open <code>http://localhost:8080/</code>. Add <code>about.why</code> next to it and <code>/about</code> exists immediately. Copy a file in, refresh, it is live — every request re-reads and reparses the page.</p>
+
+        <h2 id="tasks">Run, check, package</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Task</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>./gradlew whyRun</code></td><td>Serves <code>src/why</code>. Stops with <code>Ctrl+C</code>.</td></tr>
+              <tr><td><code>./gradlew whyCheck</code></td><td>Parses and checks every page, prints the page map, fails on problems. It is wired into <code>check</code>.</td></tr>
+              <tr><td><code>./gradlew jar</code></td><td>Copies <code>src/why</code> into the jar at <code>META-INF/why-site</code> with a sorted <code>META-INF/why-site.index</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><code>whyCheck</code> reports unresolved imports and partials, duplicate <code>def</code>s, undefined function calls and URL collisions. It never touches the database. Wire it into CI by running <code>./gradlew check</code>.</p>
+        <div class="callout">
+          <p><strong>Database files stay out of the jar.</strong> Anything matching <code>*.db</code>, <code>*.db-journal</code>, <code>*.db-wal</code> or <code>*.db-shm</code> under <code>src/why</code> is excluded from both the jar and the index.</p>
+        </div>
+
+        <h2 id="configure">Configure</h2>
+        <p>The <code>why</code> extension overrides the defaults:</p>
+        <div class="code"><div class="code-title">build.gradle.kts</div><pre><code>why {
+    siteDir.set(layout.projectDirectory.dir("src/why"))
+    host.set("127.0.0.1")
+    port.set(8080)
+    diagnostics.set(true)       // --dev for whyRun
+    secureCookies.set(false)
+    databaseFile.set(layout.projectDirectory.file("data.db"))
+}</code></pre></div>
+        <p><code>whyRun</code> uses the CLI default database, <code>src/why/data.db</code>, unless <code>databaseFile</code> is set. Keep development data out of the source tree by pointing <code>databaseFile</code> somewhere else, such as <code>layout.buildDirectory.file("data.db")</code>.</p>
+
+        <h2 id="embed">Embed in Java</h2>
+        <p>The plugin adds <code>why-lang</code> as an <code>api</code> dependency, so project code can serve the packaged site itself:</p>
+        <div class="code"><div class="code-title">src/main/java/App.java</div><pre><code>import why.Site;
+import why.WhyServer;
+
+Site site = Site.fromClasspath();                 // or Site.fromClasspath(loader, dbFile)
+WhyServer server = new WhyServer(site, 8080);
+server.start();</code></pre></div>
+        <p><code>Site.fromClasspath()</code> extracts the indexed resources to a temporary folder and bootstraps <code>schema.sql</code> when the database does not exist. Pass an explicit <code>dbFile</code> to keep data across restarts. Resources from multiple jars merge when their page names differ; a duplicate path is an error.</p>
+
+        <h2 id="source">From source</h2>
+        <p>To work on Why itself, clone the repository. It carries both a Maven build for the shaded CLI jar and a Gradle build for the library and plugin.</p>
         <div class="code"><div class="code-title">terminal</div><pre><code>git clone https://github.com/slayyyyer/why-lang.git
 cd why-lang
 mvn package
 java -jar target/why.jar ./site</code></pre></div>
-        <p>The demo site starts on <code>http://localhost:8080</code>. If the port is taken, add <code>--port 3000</code>. For a public deployment, add <code>--production</code> to return a generic 500 page and keep error details in the server log. Behind TLS, add <code>--secure-cookies</code> to mark the session cookie <code>Secure</code>.</p>
-        <div class="callout">
-          <p><strong>One jar.</strong> The SQLite JDBC driver is shaded in. There is no runtime dependency to install beyond the JDK.</p>
-        </div>
+        <p>The demo site starts on <code>http://localhost:8080</code>. To try a local build of the plugin against a consumer project instead, publish it locally and add <code>mavenLocal()</code> ahead of <code>mavenCentral()</code> in both repository blocks above:</p>
+        <div class="code"><div class="code-title">terminal</div><pre><code>./gradlew publishToMavenLocal :why-gradle-plugin:publishToMavenLocal</code></pre></div>
 
-        <h2 id="first">A first page</h2>
-        <p>Make a new folder inside the project and add <code>index.why</code> in an editor:</p>
-        <div class="code"><div class="code-title">mysite/index.why</div><pre><code>&lt;h1&gt;Hello from a file&lt;/h1&gt;
-&lt;p&gt;No build step, no route table.&lt;/p&gt;</code></pre></div>
-        <p>A file with no section labels is all view, so plain HTML is already a valid page. Start the server against that folder:</p>
-        <div class="code"><div class="code-title">terminal</div><pre><code>java -jar target/why.jar ./mysite --port 3000</code></pre></div>
-        <p>Open <code>http://localhost:3000/</code>. Add <code>about.why</code> next to it and <code>/about</code> exists immediately. Copy a file in, refresh, it is live — every request re-reads and reparses the page.</p>
-
-        <h2 id="options">Options</h2>
+        <h2 id="options">CLI options</h2>
+        <p><code>whyCheck</code> and <code>whyRun</code> drive the same CLI, so these flags apply. <code>whyRun</code> passes <code>--host</code>, <code>--port</code>, <code>--dev</code>, <code>--secure-cookies</code> and <code>--db</code> from the extension.</p>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
             <tbody>
               <tr><td><code>site</code></td><td>Folder of <code>.why</code> files. Default: the current directory.</td></tr>
               <tr><td><code>-p</code>, <code>--port N</code></td><td>Port to listen on. Default: <code>8080</code>.</td></tr>
+              <tr><td><code>--host HOST</code></td><td>Interface to bind. Default: <code>127.0.0.1</code> (loopback only). Use <code>0.0.0.0</code> only to expose it deliberately.</td></tr>
               <tr><td><code>--db FILE</code></td><td>SQLite file. Default: <code>data.db</code> inside the site folder.</td></tr>
-              <tr><td><code>--production</code></td><td>Return a generic 500 page without paths, source, SQL details or stack traces; details are logged server-side.</td></tr>
+              <tr><td><code>--dev</code></td><td>Show source excerpts, SQL errors and stack traces in 500 pages. Error pages are generic by default; details are always logged server-side.</td></tr>
               <tr><td><code>--secure-cookies</code></td><td>Mark the session cookie <code>Secure</code> when serving behind TLS.</td></tr>
               <tr><td><code>check [site]</code></td><td>Parse and check every page, report problems, print the page map, exit 1 on problems. Does not serve or touch the database.</td></tr>
               <tr><td><code>-h</code>, <code>--help</code></td><td>Usage.</td></tr>
@@ -89,39 +150,39 @@ java -jar target/why.jar ./site</code></pre></div>
         </div>
 
         <h2 id="database">The database</h2>
-        <p>If <code>data.db</code> is missing when the server starts and the site folder contains <code>schema.sql</code>, the script runs once. A small site can therefore be a folder you can copy anywhere.</p>
-        <div class="code"><div class="code-title">mysite/schema.sql</div><pre><code>create table if not exists notes (
+        <p>If the database file is missing when the server starts and the site folder contains <code>schema.sql</code>, the script runs once. A small site can therefore be a folder you can copy anywhere.</p>
+        <div class="code"><div class="code-title">src/why/schema.sql</div><pre><code>create table if not exists notes (
   id integer primary key,
   body text not null,
   created_at text not null
 );</code></pre></div>
         <p>There is no migration runner. In development, deleting the database and letting <code>schema.sql</code> recreate it is the whole story. In anything you care about, keep the schema and migrations outside Why.</p>
 
-        <h2 id="check">Check a site</h2>
-        <p>Before serving, or in CI, parse and check the whole folder:</p>
-        <div class="code"><div class="code-title">terminal</div><pre><code>java -jar target/why.jar check ./mysite</code></pre></div>
-        <p>It reports unresolved imports and partials, duplicate defs, undefined free-function calls and URL collisions, then prints a page map. It exits <code>0</code> when clean and <code>1</code> when it finds something. It never opens the database.</p>
-        <p>The same jar has a <code>check</code> recipe for a CI workflow on the <a href="recipes.html#ci">recipes page</a>.</p>
-
         <h2 id="deploy">Running it somewhere</h2>
-        <p>The artifact is <code>target/why.jar</code> plus your site folder. On a server, run it under whatever supervises processes, put it behind a reverse proxy if it is exposed, keep the SQLite database outside the site folder, and keep backups of the SQLite file.</p>
+        <p>The artifact is your application jar with the pages inside it, or <code>target/why.jar</code> plus a site folder for the CLI. On a server, run it under whatever supervises processes, put it behind a reverse proxy if it is exposed, keep the SQLite database outside the site folder, and keep backups of the SQLite file.</p>
         <div class="callout warn">
           <p><strong>Not production-hardened.</strong> There is no TLS, authentication, rate limiting or sandbox. Pages can run arbitrary SQL and read the database. Run it on a trusted network, or treat it as a prototype.</p>
         </div>
 
         <h2 id="troubleshooting">Troubleshooting</h2>
+        <h3>“Plugin [id: 'io.github.slayyyyer.why', version: '0.1.0'] was not found”</h3>
+        <p>The marker lives on Maven Central, not the Plugin Portal. Add <code>mavenCentral()</code> to <code>pluginManagement.repositories</code> in <code>settings.gradle.kts</code>.</p>
+        <h3>“Could not find io.github.slayyyyer:why-lang:0.1.0”</h3>
+        <p>The plugin adds the runtime as a dependency. Add <code>mavenCentral()</code> to the project's <code>repositories</code> block.</p>
+        <h3><code>whyRun</code> does nothing</h3>
+        <p>Both tasks skip when the site directory is missing. Create <code>src/why</code>, or point <code>why { siteDir.set(...) }</code> at your folder.</p>
         <h3>“Address already in use”</h3>
-        <p>Another process owns the port. Add <code>--port 3000</code> or pick another number.</p>
+        <p>Another process owns the port. Set <code>why { port.set(3000) }</code>, or add <code>--port 3000</code> to the CLI.</p>
         <h3>“cannot find import 'header'”</h3>
         <p>The import is a bare name. It looks for <code>header.why</code> next to the importing page, then in the site root. Check the spelling and the folder. A leading <code>_</code> is allowed and means import-only.</p>
         <h3><code>/_header</code> answers 404</h3>
         <p>That is the convention: files whose name starts with <code>_</code> can be imported but are never served. Use <code>{{&gt; _header}}</code> from a page.</p>
         <h3>I changed <code>schema.sql</code> and nothing happened</h3>
-        <p>The script only runs when the database file is missing. For the demo, stop the server, delete <code>site/data.db</code>, and start again.</p>
+        <p>The script only runs when the database file is missing. Stop the server, delete the database, and start again.</p>
         <h3>“java: command not found” or the wrong version</h3>
-        <p>Install JDK 21+ and check <code>java -version</code>. The build also needs Maven on <code>PATH</code>.</p>
+        <p>Install JDK 21+ and check <code>java -version</code>. Gradle uses whatever JDK it runs on unless you set a toolchain.</p>
         <h3>The page is blank</h3>
-        <p>Check the server log: parse and runtime errors are printed with <code>file:line</code>, and the browser gets a 500 page with the source excerpt. <code>why check</code> catches most problems before the request.</p>
+        <p>Check the server log: parse and runtime errors are printed with <code>file:line</code>, and with <code>diagnostics.set(true)</code> the browser gets a 500 page with the source excerpt. <code>whyCheck</code> catches most problems before the request.</p>
 
         <hr>
         <p>Next: <a href="usage.html">the language and page format</a>, or <a href="recipes.html">copy a recipe</a>.</p>

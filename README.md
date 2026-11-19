@@ -9,52 +9,65 @@ step, no framework boilerplate.
 
 > Named in tribute to _why the lucky stiff_, whose tiny, whimsical tools (Camping, Shoes, *Why's (Poignant) Guide to Ruby*) made programming feel like play.
 
-Requires JDK 21+. Build the CLI with Maven 3.9+ (the included Gradle wrapper builds the library and plugin):
+Requires JDK 21+.
 
-```bash
-mvn package
-java -jar target/why.jar ./site
-# Why is serving /…/site at http://localhost:8080
+## Quick start
+
+The `io.github.slayyyyer.why` Gradle plugin is on Maven Central. Point both repository blocks at it,
+then put pages in `src/why`:
+
+```kotlin
+// settings.gradle.kts
+pluginManagement {
+    repositories {
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
 ```
 
-If port 8080 is taken, add `--port 3000`. For a public deployment, add `--production` to return a
-generic 500 page without paths, source, SQL details or stack traces; the details are still written
-to the server log. Behind TLS, add `--secure-cookies` to mark the session cookie `Secure`.
+```kotlin
+// build.gradle.kts
+plugins {
+    id("io.github.slayyyyer.why") version "0.1.0"
+}
 
-To parse and check every page without serving it:
-
-```bash
-java -jar target/why.jar check ./site
+repositories {
+    mavenCentral()
+}
 ```
 
-`check` reports unresolved imports and partials, duplicate `def`s, undefined function calls and URL
+```bash
+mkdir -p src/why
+printf '<h1>Hello from a file</h1>\n' > src/why/index.why
+./gradlew whyRun
+# Why is serving /…/src/why at http://localhost:8080
+```
+
+Two repositories, two jobs: `pluginManagement` resolves the plugin marker, which is on Maven
+Central rather than the Plugin Portal, and the project `repositories` block resolves
+`io.github.slayyyyer:why-lang`, which the plugin adds as an `api` dependency.
+
+`./gradlew whyCheck` parses and checks every page without serving it and is wired into `check`. It
+reports unresolved imports and partials, duplicate `def`s, undefined function calls and URL
 collisions, then prints a page map. It exits 1 when it finds anything and does not touch the
 database.
 
 ## Gradle plugin
 
-The repository is also a Gradle build and provides the `why` plugin for Java projects. Put pages and
-assets in `src/why`:
+The plugin targets Java projects. Put pages and assets in `src/why`:
 
 ```
 src/why/index.why
 src/why/style.css
 ```
 
-Then apply the plugin in `build.gradle.kts`:
-
-```kotlin
-plugins {
-    id("why") version "0.1.0"
-}
-```
-
-The plugin applies `java-library`, adds the Why runtime (`why:why-lang:0.1.0`) as an `api`
+The plugin applies `java-library`, adds the Why runtime (`io.github.slayyyyer:why-lang:0.1.0`) as an `api`
 dependency, copies `src/why` into the jar at `META-INF/why-site`, and writes a sorted
 `META-INF/why-site.index`. It adds:
 
-- `./gradlew whyRun` — serve `src/why`; `whyCheck` is wired into `check`.
-- `./gradlew whyCheck` — compile every page and print the page map.
+- `./gradlew whyRun` — serve `src/why`.
+- `./gradlew whyCheck` — compile every page and print the page map; wired into `check`.
 - `./gradlew jar` — package pages and assets as classpath resources.
 
 The `why` extension overrides the defaults:
@@ -87,34 +100,30 @@ server.start();
 restarts. Resources from multiple jars merge when their page names differ; a duplicate path is an
 error.
 
-For local use, publish the runtime and plugin to the Maven local repository before applying the
-plugin from a consumer project:
+## From source
+
+The repository carries both a Maven build for the shaded CLI jar and a Gradle build for the library
+and plugin. To work on Why itself:
 
 ```bash
-./gradlew publishToMavenLocal
+mvn package
+java -jar target/why.jar ./site
 ```
 
-Add `mavenLocal()` to both `pluginManagement` repositories in the consumer's `settings.gradle.kts`
-(so the plugin marker resolves) and the project `repositories` block (so `why:why-lang` resolves):
+`java -jar target/why.jar check ./site` parses and checks the site without serving it. The CLI
+accepts `--port`, `--host`, `--db`, `--dev` and `--secure-cookies`; the plugin exposes the same
+settings through the `why` extension.
 
-```kotlin
-// settings.gradle.kts
-pluginManagement {
-    repositories {
-        mavenLocal()
-        gradlePluginPortal()
-        mavenCentral()
-    }
-}
-```
+To try a local build of the plugin against a consumer project, run
+`./gradlew publishToMavenLocal :why-gradle-plugin:publishToMavenLocal` and put `mavenLocal()` ahead
+of `mavenCentral()` in both repository blocks.
 
-```kotlin
-// build.gradle.kts
-repositories {
-    mavenLocal()
-    mavenCentral()
-}
-```
+## Releasing to Maven Central
+
+The runtime, the Gradle plugin and its marker publish under `io.github.slayyyyer` with Nmcp.
+Releases are uploaded from a local machine with `./publish-central.sh`; because the build uses
+`USER_MANAGED`, the upload then waits for `./gradlew nmcpPublishDeployment -PnmcpDeploymentId=<id>`.
+See [RELEASING.md](RELEASING.md) for the namespace, GPG key, Central token and release steps.
 
 ## Website
 
@@ -163,7 +172,9 @@ For an exposed deployment:
 - run Why as a dedicated, non-root service account with least-privilege filesystem permissions
 - keep the SQLite database outside the web root, using an explicit `--db` path
 - keep regular, protected backups outside the web root and test restoring them
-- use `--production` and review the service's logs and network access
+- keep `--dev` off so error responses stay generic, and review the service's logs and network access
+- keep the default security headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+  `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY`
 
 See [SECURITY.md](SECURITY.md) for the full security policy and deployment checklist.
 
@@ -176,12 +187,15 @@ See [SECURITY.md](SECURITY.md) for the full security policy and deployment check
   starts with `_` are import-only and have no URL.
 - Allowlisted public assets (HTML, CSS, JS, JSON, SVG, images, fonts and text) are served with
   content types. Database, schema, backup and other files are not public.
-- 404 page; a 500 page with `file:line`, the offending source line and a caret, the partial or
-  import chain that led there, did-you-mean hints, and the message in development; `--production`
-  returns a generic 500 while logging the details server-side; one request log line per request.
+- 404 page; with `--dev`, a 500 page with `file:line`, the offending source line and a caret, the
+  partial or import chain that led there, did-you-mean hints, and the message; without it, errors
+  are generic while the details are logged server-side; one request log line per request.
+- Security headers on every response (`nosniff`, `no-referrer`, `frame-ancestors 'none'` and
+  `X-Frame-Options: DENY`); a page may opt into a fuller CSP with `response.csp("...")`.
 - Hard per-request limits: 64 KiB bodies, 16 KiB/100 headers, 32 concurrent requests, a 10-second
-  timeout, 100k interpreter steps and 1M rendered characters.
-- `java -jar why.jar [site] [--port N] [--db FILE] [--production] [--secure-cookies]`;
+  timeout, 100k interpreter steps, 1M rendered characters, 10k/4 MiB database results, 4 MiB static
+  assets, 4 KiB flash values and 256 KiB pages/imports.
+- `java -jar why.jar [site] [--host HOST] [--port N] [--db FILE] [--dev] [--secure-cookies]`;
   `java -jar why.jar check [site]` parses and checks the whole site without serving it.
 
 ## M1 — the language and views
@@ -362,13 +376,22 @@ script is applied once so a site folder is self-contained.
   live in a bounded, expiring in-memory store keyed by a server-issued `why_session` cookie;
   restarting the server drops them.
 
+## Responses
+
+`redirect("/path")` answers `303 See Other`. `response.csp("default-src 'self'")` opts a page into
+a Content-Security-Policy; the default `frame-ancestors 'none'` is appended unless the policy sets
+its own. The policy must be printable ASCII on one line.
+
+Every response also carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+`Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY`.
+
 ## Project layout
 
 ```
 pom.xml, build.gradle.kts, settings.gradle.kts, gradlew
 site/                      demo site: pages, partials, CSS, schema.sql
 docs/                      project site, published to GitHub Pages
-why-gradle-plugin/         the `why` Gradle plugin and its TestKit tests
+why-gradle-plugin/         the `io.github.slayyyyer.why` plugin and its TestKit tests
 .github/workflows/ci.yml     tests and demo site check
 .github/workflows/pages.yml  GitHub Pages publishing
 src/main/java/why/
@@ -391,3 +414,7 @@ src/test/java/why/         JUnit 5 tests (language, templates, pages, HTTP)
 Milestones M0–M2, kept deliberately small. Classes, packages, bytecode, Truffle, sandboxing and
 performance work are out of scope. Decisions, assumptions and deferred features live in
 [NOTES.md](NOTES.md); M2's awkward edges are in [FRICTION.md](FRICTION.md).
+
+## License
+
+Why is available under the MIT License. See [LICENSE](LICENSE).
