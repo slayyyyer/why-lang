@@ -16,7 +16,7 @@
     <a class="brand" href="index.html" aria-label="Why home"><span class="mark">W</span><span>why</span></a>
     <nav class="site-nav" aria-label="Main">
       <a href="usage.html" aria-current="page">Using</a>
-      <a href="why.html">Why</a>
+      <a href="why.html">The idea</a>
       <a href="install.html">Install</a>
       <a href="recipes.html">Recipes</a>
       <a class="gh" href="https://github.com/slayyyyer/why-lang">GitHub <span aria-hidden="true">↗</span></a>
@@ -36,6 +36,7 @@
         <a href="#request">Request globals</a>
         <a href="#database">The database</a>
         <a href="#responses">Responses and flash</a>
+        <a href="#not-yet">Not yet</a>
         <a href="#cli">The command line</a>
         <a href="#errors">Errors</a>
       </nav>
@@ -43,7 +44,7 @@
       <article>
         <p class="eyebrow">Using Why</p>
         <h1>Three sections, one page.</h1>
-        <p class="lead">A page is a controller and a view in one file, with optional imports. The server finds it by path, compiles it, runs the controller, and renders the view.</p>
+        <p class="lead">A page is a controller and a view in one file, with optional imports. The server finds it by path, parses it, runs the controller, and renders the view.</p>
 
         <h2 id="page-file">A page is a file</h2>
         <p>A page has up to three sections. Each label is a line containing exactly the label at column 0, and the sections must appear in this order:</p>
@@ -151,7 +152,7 @@ end</code></pre></div>
 {{&amp; title}}            raw
 {{! a comment }}
 
-{{#if posts.length}} … {{else}} … {{/if}}
+{{#if posts.length > 0}} … {{else}} … {{/if}}
 {{#unless done}} … {{/unless}}
 
 {{#each posts}}
@@ -163,6 +164,8 @@ end</code></pre></div>
 
 {{&gt; header}}</code></pre></div>
         <p>Inside <code>{{#each}}</code> the current item is <code>it</code>; <code>@index</code>, <code>@first</code> and <code>@last</code> are available, plus <code>@key</code> when iterating a hash. A mustache can call a function: <code>{{shout(post.title)}}</code>.</p>
+        <p>Template truthiness follows the language: only <code>nil</code> and <code>false</code> are falsy, so an empty list's <code>length</code> is <code>0</code> and still truthy. Compare it with <code>posts.length &gt; 0</code> when you need the empty branch.</p>
+        <p>Custom block helpers are not supported yet. Template blocks are limited to <code>if</code>, <code>unless</code> and <code>each</code>; a page cannot define its own <code>{{#name}}</code>. A <code>def</code> can take a language block (<code>do |x| ... end</code>), but that block cannot be called from a view.</p>
 
         <h2 id="request">Request globals</h2>
         <div class="table-wrap">
@@ -197,12 +200,23 @@ end
 
 # view
 {{#if flash.notice}}&lt;p class="note"&gt;{{flash.notice}}&lt;/p&gt;{{/if}}</code></pre></div>
-        <p>The flash is stored in memory, keyed by a <code>why_session</code> cookie. It is available on the next page request and gone after that. Restarting the server drops pending messages; there is no longer-lived session.</p>
+        <p>The flash is stored in memory, keyed by a <code>why_session</code> cookie. The cookie is <code>HttpOnly</code> and <code>SameSite=Lax</code>. It is available on the next page request and gone after that. Restarting the server drops pending messages; there is no longer-lived session.</p>
         <ul>
           <li>Unknown paths answer 404.</li>
           <li>POST to a static file answers 405.</li>
           <li>Errors answer 500 with a diagnostic page.</li>
         </ul>
+
+        <h2 id="not-yet">Not yet</h2>
+        <p>These are deliberate gaps in the current proof of concept, not hidden behavior:</p>
+        <ul>
+          <li><strong>Long-lived sessions.</strong> Only the one-shot flash survives across a redirect.</li>
+          <li><strong>A cookies API.</strong> The <code>why_session</code> cookie is internal to flash; pages cannot read or set cookies.</li>
+          <li><strong><code>json</code>, <code>env</code>, and <code>log</code> helpers.</strong> None of these exists.</li>
+          <li><strong>Custom response headers or status codes.</strong> <code>redirect(path)</code> is the only explicit response, and it always answers <code>303 See Other</code>.</li>
+          <li><strong>Multipart forms or uploads.</strong> Only <code>application/x-www-form-urlencoded</code> bodies are read.</li>
+        </ul>
+        <p>Custom block helpers are also not supported yet; see <a href="#views">Views</a>.</p>
 
         <h2 id="cli">The command line</h2>
         <div class="code"><div class="code-title">terminal</div><pre><code># serve a folder on the default port, 8080
@@ -211,7 +225,7 @@ java -jar target/why.jar ./site
 # choose a port and database file
 java -jar target/why.jar ./site --port 3000 --db ./site/data.db
 
-# compile every page without serving it
+# parse and check every page without serving it
 java -jar target/why.jar check ./site</code></pre></div>
         <p><code>check</code> reports unresolved imports and partials, duplicate defs, undefined function calls and URL collisions, then prints a page map. It exits 1 when it finds anything and never touches the database.</p>
         <div class="code"><div class="code-title">why check</div><pre><code>checking 3 pages in /srv/why/site
@@ -254,6 +268,7 @@ Reached via
       <a href="https://github.com/slayyyyer/why-lang">GitHub</a>
       <a href="https://github.com/slayyyyer/why-lang/blob/main/NOTES.md">Notes</a>
     </span>
+    <p class="tribute">Named in tribute to <em>why the lucky stiff</em>, whose tiny, whimsical tools (Camping, Shoes, <em>Why's (Poignant) Guide to Ruby</em>) made programming feel like play.</p>
   </div>
 </footer>
 

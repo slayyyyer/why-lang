@@ -7,6 +7,8 @@ controller, and a view in one file, with the URL as the filename and SQLite data
 Controller and view are separate sections. Drop it in a folder and it's live. No router, no build
 step, no framework boilerplate.
 
+> Named in tribute to _why the lucky stiff_, whose tiny, whimsical tools (Camping, Shoes, *Why's (Poignant) Guide to Ruby*) made programming feel like play.
+
 Requires JDK 21+ and Maven 3.9+ on `PATH`:
 
 ```bash
@@ -17,7 +19,7 @@ java -jar target/why.jar ./site
 
 If port 8080 is taken, add `--port 3000`.
 
-To compile every page without serving it:
+To parse and check every page without serving it:
 
 ```bash
 java -jar target/why.jar check ./site
@@ -57,8 +59,9 @@ export JAVA_HOME="$PWD/.tools/jdk"; export PATH="$JAVA_HOME/bin:$PATH"
 .tools/jdk/bin/java -jar target/why.jar ./site --port 3000
 ```
 
-Status: **M0 and M1 are done**, and the demo's M2 write path (a guestbook) is in place. This is
-a proof of concept, not a production runtime.
+Status: **a proof of concept**. The page format, controller language, views, SQLite access, forms,
+redirects, one-shot flash messages, diagnostics and `why check` are implemented. This is not a
+production runtime.
 
 ## M0 — the shell
 
@@ -71,8 +74,8 @@ a proof of concept, not a production runtime.
 - 404 page; a 500 page with `file:line`, the offending source line and a caret, the partial or
   import chain that led there, did-you-mean hints, and the message; one request log line per
   request.
-- `java -jar why.jar [site] [--port N] [--db FILE]`; `java -jar why.jar check [site]` compiles
-  the whole site without serving it.
+- `java -jar why.jar [site] [--port N] [--db FILE]`; `java -jar why.jar check [site]` parses
+  and checks the whole site without serving it.
 
 ## M1 — the language and views
 
@@ -205,7 +208,7 @@ Built-in methods:
 {{& title}}            raw
 {{! a comment }}
 
-{{#if posts.length}} … {{else}} … {{/if}}
+{{#if posts.length > 0}} … {{else}} … {{/if}}
 {{#unless done}} … {{/unless}}
 
 {{#each posts}}
@@ -220,7 +223,8 @@ Built-in methods:
 
 Inside `{{#each}}` the current item is `it`; `@index`, `@first` and `@last` are available, and
 `@key` when iterating a hash. A mustache holds a real expression, so `{{shout(post.title)}}` and
-`{{posts.length}}` work.
+`{{posts.length}}` work. Only `nil` and `false` are falsy in views too, so an empty list's `length`
+is `0` and still truthy; use `posts.length > 0` for an empty state.
 
 ## The `db` global
 
@@ -254,15 +258,16 @@ script is applied once so a site folder is self-contained.
 pom.xml
 site/                      demo site: pages, partials, CSS, schema.sql
 docs/                      project site, published to GitHub Pages
-.github/workflows/pages.yml
+.github/workflows/ci.yml     tests and demo site check
+.github/workflows/pages.yml  GitHub Pages publishing
 src/main/java/why/
   Main.java                CLI
   WhyServer.java           HTTP handler, errors, static files
   Site.java                the .why extension and URL → file resolution
   PageLoader.java          imports/controller/view section splitting
-  PageCompiler.java        import resolution and compilation
-  Program.java             a compiled page
-  Checker.java             compile-only site check and page map
+  PageCompiler.java        import resolution and parsing
+  Program.java             a parsed page
+  Checker.java             parse-and-check site map
   lang/                    Lexer, Parser, Ast, Interpreter, Scope, Value, Db
   tpl/                     Template, TemplateParser
   util/Html.java

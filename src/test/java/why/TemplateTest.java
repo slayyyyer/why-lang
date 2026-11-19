@@ -56,6 +56,16 @@ class TemplateTest {
     }
 
     @Test
+    void emptyListLengthIsTruthyButNeedsAnExplicitComparison() {
+        assertEquals("yes", render("{{#if posts.length}}yes{{else}}no{{/if}}",
+                Map.of("posts", List.of()), Map.of()));
+        assertEquals("no", render("{{#if posts.length > 0}}yes{{else}}no{{/if}}",
+                Map.of("posts", List.of()), Map.of()));
+        assertEquals("yes", render("{{#if posts.length > 0}}yes{{else}}no{{/if}}",
+                Map.of("posts", List.of("one")), Map.of()));
+    }
+
+    @Test
     void partialsSeeTheCurrentScope() {
         Map<String, Template> partials = Map.of(
                 "header", TemplateParser.parse("<header>{{site}}</header>", "header.why", 2));

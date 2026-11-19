@@ -490,6 +490,15 @@ td code { white-space: nowrap; }
 .foot-links { display: flex; gap: 1.2rem; }
 .foot-links a { color: var(--muted); text-decoration: none; }
 .foot-links a:hover { color: var(--ink); }
+.tribute {
+  flex-basis: 100%;
+  margin: 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  max-width: 62rem;
+  line-height: 1.6;
+}
+.tribute em { color: var(--ink); font-style: italic; }
 
 /* ---- responsive ---- */
 
