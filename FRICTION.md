@@ -7,7 +7,7 @@ a POST form, a bound `db.exec` insert, and a redirect back. Written while buildi
 
 - The whole write path is one page. Branching on `request.method` reads clearly: validate,
   insert, redirect; otherwise list and render.
-- `form.name` and bound `db.exec` parameters were enough; no model layer or ORM was missed.
+- `form.name` and bound `db.exec` parameters were enough; no model layer or ORM was needed.
 - Header/footer partials meant the page inherited the site chrome in three lines.
 
 ## Where the page model got in the way
@@ -30,8 +30,8 @@ a POST form, a bound `db.exec` insert, and a redirect back. Written while buildi
 4. **Validation has nowhere to live.**
    Empty fields simply fall through: no insert, no redirect, no message. Re-rendering with the
    submitted values and an error would mean inventing `old`/`error` variables and a per-page
-   convention; the page format suggests nothing. Old PHP had the same hole, which is why every
-   tutorial invented its own answer.
+   convention; the page format suggests nothing. Most form frameworks leave validation to the
+   application, which is why every tutorial invents its own answer.
 
 5. **The write branch is invisible.**
    The controller runs on GET and POST; the only guard is `request.method == "POST"`. A typo in
@@ -73,5 +73,5 @@ a POST form, a bound `db.exec` insert, and a redirect back. Written while buildi
 13. **`{{#if count}}` is always true.**
     Ruby truthiness means `0` is truthy, so the natural "are there entries?" check renders an
     empty list instead of the empty state. The demo writes `{{#if count > 0}}`; every page has to
-    remember that `if x` tests existence, not emptiness. PHP's falsy `0` is friendlier here, and
-    the disagreement is now visible in template code.
+    remember that `if x` tests existence, not emptiness. A language with falsy zero is friendlier
+    here, and the disagreement is now visible in template code.

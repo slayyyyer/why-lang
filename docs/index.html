@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Why — a page language for the JVM</title>
-<meta name="description" content="Drop a .why file in a folder, hit its URL, it runs. A small, Ruby-flavored, old-school PHP-style page language for the JVM.">
+<meta name="description" content="A small, Ruby-flavored page language for the JVM. Each page is one file with imports, a controller, and a view. Drop it in a folder and it's live.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -28,9 +28,9 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <p class="eyebrow">JVM · Ruby-flavored · old-school PHP</p>
+        <p class="eyebrow">JVM · Ruby-flavored · file-per-page MVC</p>
         <h1>Drop a file.<br>Hit its URL.<br><em>It runs.</em></h1>
-        <p class="lede">Why is a small page language for the JVM. A page is a <code>.why</code> file in a folder; the server compiles it on request. No router, no build step, no framework — one jar and a directory.</p>
+        <p class="lede">Why is a small page language for the JVM. A page is a <code>.why</code> file in a folder; the server parses it on request. Controller and view are separate sections, and SQLite data access is built in. No router, no build step, no framework — one jar and a directory.</p>
         <div class="actions">
           <a class="btn" href="install.html">Install in two commands</a>
           <a class="btn ghost" href="usage.html">Read the language</a>
@@ -89,7 +89,7 @@ view:
         <div class="feature">
           <span class="num">01</span>
           <h3>A page is a file</h3>
-          <p><code>imports:</code>, <code>controller:</code>, <code>view:</code>. Drop it in the folder and the URL exists. No route table to update.</p>
+          <p><code>imports:</code>, <code>controller:</code>, <code>view:</code>. The controller and view are separate sections; SQLite access is built in. Drop it in the folder and the URL exists. No route table to update.</p>
         </div>
         <div class="feature">
           <span class="num">02</span>
