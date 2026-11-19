@@ -10,6 +10,7 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
+import why.lang.ExecutionBudget;
 import why.lang.Interpreter;
 import why.lang.Scope;
 import why.tpl.Template;
@@ -98,5 +99,25 @@ class TemplateTest {
     void unknownPartialsAreCompileErrors() {
         WhyError error = assertThrows(WhyError.class, () -> render("{{> nope}}", Map.of(), Map.of()));
         assertTrue(error.getMessage().contains("unknown partial"));
+    }
+
+    @Test
+    void outputBudgetStopsOversizedViews() {
+        Interpreter interpreter = new Interpreter(Map.of(), new Scope(null),
+                new ExecutionBudget(100, 4, Long.MAX_VALUE));
+        Template template = TemplateParser.parse("abcdef", "test.why", 1);
+
+        WhyError error = assertThrows(WhyError.class,
+                () -> template.render(interpreter, new Scope(null), Map.of()));
+        assertTrue(error.getMessage().contains("output budget"));
+    }
+
+    @Test
+    void recursivePartialsStopAtTheDepthBudget() {
+        Template recursive = TemplateParser.parse("{{> self}}", "loop.why", 1);
+        Map<String, Template> partials = Map.of("self", recursive);
+
+        WhyError error = assertThrows(WhyError.class, () -> render("{{> self}}", Map.of(), partials));
+        assertTrue(error.getMessage().contains("partial depth budget"));
     }
 }

@@ -14,6 +14,8 @@ import why.util.Suggest;
 /** A compiled view: literal text, {@code {{...}}} mustaches, blocks and partials. */
 public final class Template {
 
+    private static final int MAX_PARTIAL_DEPTH = 128;
+
     public interface Node {}
 
     public record Text(String text) implements Node {}
@@ -46,18 +48,30 @@ public final class Template {
     }
 
     void renderInto(StringBuilder out, Interpreter interp, Scope scope, Map<String, Template> partials) {
-        renderNodes(out, nodes, interp, scope, partials);
+        renderInto(out, interp, scope, partials, 0);
+    }
+
+    private void renderInto(StringBuilder out, Interpreter interp, Scope scope,
+                            Map<String, Template> partials, int depth) {
+        if (depth > MAX_PARTIAL_DEPTH) {
+            throw new WhyError("partial depth budget exceeded", file, 0);
+        }
+        renderNodes(out, nodes, interp, scope, partials, depth);
     }
 
     private void renderNodes(StringBuilder out, List<Node> nodes, Interpreter interp, Scope scope,
-                             Map<String, Template> partials) {
+                             Map<String, Template> partials, int depth) {
         for (Node node : nodes) {
             try {
+                interp.step();
                 if (node instanceof Text text) {
+                    interp.output(text.text().length());
                     out.append(text.text());
                 } else if (node instanceof Echo echo) {
                     String value = Value.str(interp.eval(echo.expr(), scope));
-                    out.append(echo.escape() ? Html.escape(value) : value);
+                    String rendered = echo.escape() ? Html.escape(value) : value;
+                    interp.output(rendered.length());
+                    out.append(rendered);
                 } else if (node instanceof Partial partial) {
                     Template target = partials.get(partial.name());
                     if (target == null) {
@@ -66,15 +80,15 @@ public final class Template {
                                 file, partial.line());
                     }
                     try {
-                        target.renderInto(out, interp, scope, partials);
+                        target.renderInto(out, interp, scope, partials, depth + 1);
                     } catch (WhyError e) {
                         throw e.at(file, partial.line());
                     }
                 } else if (node instanceof Block block) {
                     List<Node> branch = Value.truthy(interp.eval(block.cond(), scope)) ? block.body() : block.otherwise();
-                    renderNodes(out, branch, interp, scope, partials);
+                    renderNodes(out, branch, interp, scope, partials, depth);
                 } else if (node instanceof Each each) {
-                    renderEach(out, each, interp, scope, partials);
+                    renderEach(out, each, interp, scope, partials, depth);
                 }
             } catch (WhyError e) {
                 throw e.locate(file, e.line());
@@ -83,27 +97,29 @@ public final class Template {
     }
 
     private void renderEach(StringBuilder out, Each each, Interpreter interp, Scope scope,
-                            Map<String, Template> partials) {
+                            Map<String, Template> partials, int depth) {
         Object value = interp.eval(each.expr(), scope);
         if (value instanceof List<?> list && !list.isEmpty()) {
             int index = 0;
             for (Object item : list) {
+                interp.step();
                 Scope child = iteration(scope, item, index, list.size());
-                renderNodes(out, each.body(), interp, child, partials);
+                renderNodes(out, each.body(), interp, child, partials, depth);
                 index++;
             }
         } else if (value instanceof Map<?, ?> map && !map.isEmpty()) {
             int index = 0;
             for (Map.Entry<?, ?> entry : map.entrySet()) {
+                interp.step();
                 Scope child = iteration(scope, entry.getValue(), index, map.size());
                 child.define("@key", entry.getKey());
-                renderNodes(out, each.body(), interp, child, partials);
+                renderNodes(out, each.body(), interp, child, partials, depth);
                 index++;
             }
         } else if (value instanceof List<?> || value instanceof Map<?, ?> || !Value.truthy(value)) {
-            renderNodes(out, each.otherwise(), interp, scope, partials);
+            renderNodes(out, each.otherwise(), interp, scope, partials, depth);
         } else {
-            renderNodes(out, each.body(), interp, iteration(scope, value, 0, 1), partials);
+            renderNodes(out, each.body(), interp, iteration(scope, value, 0, 1), partials, depth);
         }
     }
 

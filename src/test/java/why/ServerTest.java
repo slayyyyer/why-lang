@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -115,10 +116,147 @@ class ServerTest {
     }
 
     @Test
+    void oversizedBodiesAreRejectedBeforePageWork() throws Exception {
+        write("accept.why", "view:\nok\n");
+        String body = "name=" + "x".repeat(65 * 1024);
+
+        HttpResponse<String> response = post("/accept", body);
+        assertEquals(413, response.statusCode());
+    }
+
+    @Test
+    void oversizedHeadersAreRejected() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + "/plain"))
+                .header("X-Big", "x".repeat(17 * 1024))
+                .GET()
+                .build();
+
+        assertEquals(431, client.send(request, HttpResponse.BodyHandlers.ofString()).statusCode());
+    }
+
+    @Test
+    void runawayPagesStopAtTheInterpreterStepBudget() throws Exception {
+        write("runaway.why", "controller:\nwhile true\nend\n\nview:\nnever\n");
+
+        HttpResponse<String> response = get("/runaway");
+        assertEquals(500, response.statusCode());
+        assertTrue(response.body().contains("step budget"));
+    }
+
+    @Test
+    void recursivePagesStopAtTheCallDepthBudget() throws Exception {
+        write("recursive.why", """
+                controller:
+                def recurse
+                  recurse()
+                end
+                recurse()
+
+                view:
+                never
+                """);
+
+        HttpResponse<String> response = get("/recursive");
+        assertEquals(500, response.statusCode());
+        assertTrue(response.body().contains("call depth budget"));
+    }
+
+    @Test
+    void databaseAndSchemaAreNotServed() throws Exception {
+        write("schema.sql", "create table notes (id integer);\n");
+
+        assertEquals(404, get("/data.db").statusCode());
+        assertEquals(404, get("/schema.sql").statusCode());
+    }
+
+    @Test
+    void symlinksPointingOutsideTheSiteAreNotServed() throws Exception {
+        Path outside = Files.createTempDirectory("why-outside-");
+        Path secret = outside.resolve("secret.css");
+        Path link = dir.resolve("linked");
+        try {
+            Files.writeString(secret, "secret", StandardCharsets.UTF_8);
+            boolean created = false;
+            try {
+                Files.createSymbolicLink(link, outside);
+                created = true;
+            } catch (UnsupportedOperationException | IOException e) {
+                if (isWindows()) {
+                    Process process = new ProcessBuilder(
+                            "cmd", "/c", "mklink", "/J", link.toString(), outside.toString())
+                            .redirectErrorStream(true)
+                            .start();
+                    process.getInputStream().readAllBytes();
+                    created = process.waitFor() == 0;
+                }
+            }
+            Assumptions.assumeTrue(created, "symbolic links or junctions are unavailable");
+
+            assertEquals(404, get("/linked/secret.css").statusCode());
+        } finally {
+            deleteLink(link);
+            Files.deleteIfExists(secret);
+            Files.deleteIfExists(outside);
+        }
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name").toLowerCase().contains("win");
+    }
+
+    private static void deleteLink(Path link) throws Exception {
+        try {
+            Files.deleteIfExists(link);
+        } catch (IOException e) {
+            if (!isWindows()) throw e;
+            Process process = new ProcessBuilder("cmd", "/c", "rmdir", link.toString())
+                    .redirectErrorStream(true)
+                    .start();
+            process.getInputStream().readAllBytes();
+            process.waitFor();
+        }
+    }
+
+    @Test
     void errorsBecomeA500PageWithALocation() throws Exception {
         HttpResponse<String> response = get("/broken");
         assertEquals(500, response.statusCode());
         assertTrue(response.body().contains("broken.why:2"));
+    }
+
+    @Test
+    void productionErrorsAreGenericAndDoNotLeakDetails() throws Exception {
+        write("db-error.why", """
+                controller:
+                db.query("select * from missing")
+
+                view:
+                never
+                """);
+
+        server.stop();
+        server = new WhyServer(new Site(dir), 0, true);
+        server.start();
+
+        HttpResponse<String> syntaxError = get("/broken");
+        assertEquals(500, syntaxError.statusCode());
+        String syntaxBody = syntaxError.body();
+        assertTrue(syntaxBody.contains("Internal server error"));
+        assertFalse(syntaxBody.contains("broken.why"));
+        assertFalse(syntaxBody.contains("unexpected end of input"));
+        assertFalse(syntaxBody.contains("controller:"));
+        assertFalse(syntaxBody.contains(dir.toString()));
+
+        HttpResponse<String> sqlError = get("/db-error");
+        assertEquals(500, sqlError.statusCode());
+        String sqlBody = sqlError.body();
+        assertTrue(sqlBody.contains("Internal server error"));
+        assertFalse(sqlBody.contains("db-error.why"));
+        assertFalse(sqlBody.contains("db.query failed"));
+        assertFalse(sqlBody.contains("no such table"));
+        assertFalse(sqlBody.contains("select * from missing"));
+        assertFalse(sqlBody.contains("at why."));
+        assertFalse(sqlBody.contains(dir.toString()));
     }
 
     @Test
@@ -197,6 +335,21 @@ class ServerTest {
     }
 
     @Test
+    void externalRedirectsAreRejected() throws Exception {
+        write("external-redirect.why", """
+                controller:
+                redirect("https://example.com/")
+
+                view:
+                never
+                """);
+
+        HttpResponse<String> response = get("/external-redirect");
+        assertEquals(500, response.statusCode());
+        assertTrue(response.body().contains("same-origin"));
+    }
+
+    @Test
     void flashIsCarriedAcrossOneRedirect() throws Exception {
         write("notice.why", """
                 controller:
@@ -227,6 +380,41 @@ class ServerTest {
         assertEquals(200, second.statusCode());
         assertTrue(second.body().contains("seen"));
         assertFalse(second.body().contains("<p>saved</p>"));
+    }
+
+    @Test
+    void clientSuppliedSessionIdsAreIgnored() throws Exception {
+        write("set-flash.why", "controller:\nflash.set(\"notice\", \"saved\")\n\nview:\nok\n");
+
+        HttpResponse<String> response = get("/set-flash", "attacker-chosen");
+        assertEquals(200, response.statusCode());
+        String setCookie = response.headers().firstValue("set-cookie").orElse("");
+        assertTrue(setCookie.startsWith("why_session="));
+        assertFalse(setCookie.startsWith("why_session=attacker-chosen"));
+    }
+
+    @Test
+    void secureCookiesAreMarkedWhenTlsIsConfigured() throws Exception {
+        write("notice.why", """
+                controller:
+                if request.method == "POST"
+                  flash.set("notice", "saved")
+                  redirect("/notice")
+                end
+
+                view:
+                seen
+                """);
+
+        server.stop();
+        server = new WhyServer(new Site(dir), 0, false, true);
+        server.start();
+
+        HttpResponse<String> posted = post("/notice", "");
+        assertEquals(303, posted.statusCode());
+        String setCookie = posted.headers().firstValue("set-cookie").orElse("");
+        assertTrue(setCookie.startsWith("why_session="));
+        assertTrue(setCookie.contains("; Secure"));
     }
 
     @Test

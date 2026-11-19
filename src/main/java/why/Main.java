@@ -14,6 +14,8 @@ public final class Main {
         Path directory = Path.of(".");
         int port = 8080;
         Path db = null;
+        boolean production = false;
+        boolean secureCookies = false;
         boolean check = args.length > 0 && args[0].equals("check");
 
         for (int i = check ? 1 : 0; i < args.length; i++) {
@@ -42,6 +44,20 @@ public final class Main {
                         return;
                     }
                     db = Path.of(value(args, ++i, arg));
+                }
+                case "--production" -> {
+                    if (check) {
+                        fail("check does not take " + arg);
+                        return;
+                    }
+                    production = true;
+                }
+                case "--secure-cookies" -> {
+                    if (check) {
+                        fail("check does not take " + arg);
+                        return;
+                    }
+                    secureCookies = true;
                 }
                 default -> {
                     if (arg.startsWith("-")) {
@@ -87,7 +103,7 @@ public final class Main {
 
         Site site = new Site(root, dbFile);
         try {
-            WhyServer server = new WhyServer(site, port);
+            WhyServer server = new WhyServer(site, port, production, secureCookies);
             server.start();
             System.out.println("Why is serving " + root + " at http://localhost:" + server.port());
             System.out.println("press Ctrl+C to stop");
@@ -121,6 +137,8 @@ public final class Main {
                   check             compile every page, report problems, print the page map
                   -p, --port PORT   port to listen on (default: 8080)
                       --db FILE     SQLite database file (default: <site>/data.db)
+                      --production  return generic 500 pages; log details server-side
+                      --secure-cookies  mark session cookies Secure (use with TLS)
                   -h, --help        show this help
 
                 Drop a .why file in the site folder and it is served at its path.

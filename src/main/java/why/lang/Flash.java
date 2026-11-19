@@ -13,7 +13,7 @@ public final class Flash {
     private final Map<String, Object> pending = new LinkedHashMap<>();
 
     public Flash(Map<String, Object> carried) {
-        this.carried = carried;
+        this.carried = carried == null ? Map.of() : carried;
     }
 
     public Object get(String key) {

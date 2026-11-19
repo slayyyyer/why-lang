@@ -58,7 +58,7 @@ mvn -version</code></pre></div>
 cd why-lang
 mvn package
 java -jar target/why.jar ./site</code></pre></div>
-        <p>The demo site starts on <code>http://localhost:8080</code>. If the port is taken, add <code>--port 3000</code>.</p>
+        <p>The demo site starts on <code>http://localhost:8080</code>. If the port is taken, add <code>--port 3000</code>. For a public deployment, add <code>--production</code> to return a generic 500 page and keep error details in the server log. Behind TLS, add <code>--secure-cookies</code> to mark the session cookie <code>Secure</code>.</p>
         <div class="callout">
           <p><strong>One jar.</strong> The SQLite JDBC driver is shaded in. There is no runtime dependency to install beyond the JDK.</p>
         </div>
@@ -79,6 +79,8 @@ java -jar target/why.jar ./site</code></pre></div>
               <tr><td><code>site</code></td><td>Folder of <code>.why</code> files. Default: the current directory.</td></tr>
               <tr><td><code>-p</code>, <code>--port N</code></td><td>Port to listen on. Default: <code>8080</code>.</td></tr>
               <tr><td><code>--db FILE</code></td><td>SQLite file. Default: <code>data.db</code> inside the site folder.</td></tr>
+              <tr><td><code>--production</code></td><td>Return a generic 500 page without paths, source, SQL details or stack traces; details are logged server-side.</td></tr>
+              <tr><td><code>--secure-cookies</code></td><td>Mark the session cookie <code>Secure</code> when serving behind TLS.</td></tr>
               <tr><td><code>check [site]</code></td><td>Parse and check every page, report problems, print the page map, exit 1 on problems. Does not serve or touch the database.</td></tr>
               <tr><td><code>-h</code>, <code>--help</code></td><td>Usage.</td></tr>
             </tbody>
@@ -101,7 +103,7 @@ java -jar target/why.jar ./site</code></pre></div>
         <p>The same jar has a <code>check</code> recipe for a CI workflow on the <a href="recipes.html#ci">recipes page</a>.</p>
 
         <h2 id="deploy">Running it somewhere</h2>
-        <p>The artifact is <code>target/why.jar</code> plus your site folder. On a server, run it under whatever supervises processes, put it behind a reverse proxy if it is exposed, and keep backups of the SQLite file.</p>
+        <p>The artifact is <code>target/why.jar</code> plus your site folder. On a server, run it under whatever supervises processes, put it behind a reverse proxy if it is exposed, keep the SQLite database outside the site folder, and keep backups of the SQLite file.</p>
         <div class="callout warn">
           <p><strong>Not production-hardened.</strong> There is no TLS, authentication, rate limiting or sandbox. Pages can run arbitrary SQL and read the database. Run it on a trusted network, or treat it as a prototype.</p>
         </div>

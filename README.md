@@ -17,7 +17,9 @@ java -jar target/why.jar ./site
 # Why is serving /…/site at http://localhost:8080
 ```
 
-If port 8080 is taken, add `--port 3000`.
+If port 8080 is taken, add `--port 3000`. For a public deployment, add `--production` to return a
+generic 500 page without paths, source, SQL details or stack traces; the details are still written
+to the server log. Behind TLS, add `--secure-cookies` to mark the session cookie `Secure`.
 
 To parse and check every page without serving it:
 
@@ -63,6 +65,23 @@ Status: **a proof of concept**. The page format, controller language, views, SQL
 redirects, one-shot flash messages, diagnostics and `why check` are implemented. This is not a
 production runtime.
 
+## Security
+
+Why pages are **trusted executable code**, not passive templates. They run inside the server process
+with access to request data and the configured database, and there is no sandbox. **Never deploy or
+accept page uploads from untrusted users**: an untrusted page is unsafe and is equivalent to running
+untrusted code on the server.
+
+For an exposed deployment:
+
+- terminate TLS in a reverse proxy and use `--secure-cookies`; do not expose the plain HTTP listener
+- run Why as a dedicated, non-root service account with least-privilege filesystem permissions
+- keep the SQLite database outside the web root, using an explicit `--db` path
+- keep regular, protected backups outside the web root and test restoring them
+- use `--production` and review the service's logs and network access
+
+See [SECURITY.md](SECURITY.md) for the full security policy and deployment checklist.
+
 ## M0 — the shell
 
 - Java 21, Maven, one runnable `target/why.jar` (SQLite JDBC shaded in).
@@ -70,12 +89,15 @@ production runtime.
 - Every `.why` file under the site folder is served at its path: `/` is `index.why`,
   `/posts/archive` is `posts/archive.why`, and `/about` also finds `about.why`. Files whose name
   starts with `_` are import-only and have no URL.
-- Other files are served as-is (CSS, JS, images, fonts) with content types.
+- Allowlisted public assets (HTML, CSS, JS, JSON, SVG, images, fonts and text) are served with
+  content types. Database, schema, backup and other files are not public.
 - 404 page; a 500 page with `file:line`, the offending source line and a caret, the partial or
-  import chain that led there, did-you-mean hints, and the message; one request log line per
-  request.
-- `java -jar why.jar [site] [--port N] [--db FILE]`; `java -jar why.jar check [site]` parses
-  and checks the whole site without serving it.
+  import chain that led there, did-you-mean hints, and the message in development; `--production`
+  returns a generic 500 while logging the details server-side; one request log line per request.
+- Hard per-request limits: 64 KiB bodies, 16 KiB/100 headers, 32 concurrent requests, a 10-second
+  timeout, 100k interpreter steps and 1M rendered characters.
+- `java -jar why.jar [site] [--port N] [--db FILE] [--production] [--secure-cookies]`;
+  `java -jar why.jar check [site]` parses and checks the whole site without serving it.
 
 ## M1 — the language and views
 
@@ -93,7 +115,8 @@ production runtime.
 
 - `form` — fields from an `application/x-www-form-urlencoded` POST body (empty on GET); also
   `request.form`
-- `redirect(path)` — stop the page and answer `303 See Other` with `Location: path`
+- `redirect("/path")` — stop the page and answer `303 See Other`; the target must be a
+  path-absolute same-origin path
 - `flash` — one-shot messages carried across the redirect: `flash.set("notice", "…")`, then
   `{{flash.notice}}` on the next page request
 
@@ -228,7 +251,8 @@ is `0` and still truthy; use `posts.length > 0` for an empty state.
 
 ## The `db` global
 
-SQLite, at `<site>/data.db` by default (`--db` overrides it). One connection per request.
+SQLite, at `<site>/data.db` by default (`--db` overrides it); point `--db` outside the site folder
+for an exposed deployment. One connection per request.
 
 ```ruby
 posts = db.query("select * from posts order by id desc")   # list of hashes
@@ -250,7 +274,8 @@ script is applied once so a site folder is self-contained.
 - `request` — a hash with `method`, `path`, `query`, `params` and `form`.
 - `flash` — one-shot messages. `flash.set("notice", "…")` stores a value for the next page
   request, where `{{flash.notice}}` can read it; the request after that no longer has it. Messages
-  live in memory, keyed by a `why_session` cookie, so restarting the server drops them.
+  live in a bounded, expiring in-memory store keyed by a server-issued `why_session` cookie;
+  restarting the server drops them.
 
 ## Project layout
 

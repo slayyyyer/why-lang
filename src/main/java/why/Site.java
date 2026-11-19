@@ -1,12 +1,16 @@
 package why;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * A folder of pages, and the rules for turning a request path into a file inside it.
  * Files whose name starts with {@code _} are import-only and are never returned by
- * {@link #resolve(String)}.
+ * {@link #resolve(String)}. Only pages and allowlisted public assets are served;
+ * database, schema and other project files stay private.
  */
 public final class Site {
 
@@ -14,6 +18,9 @@ public final class Site {
     public static final String PAGE_EXTENSION = ".why";
 
     private static final String INDEX_PAGE = "index" + PAGE_EXTENSION;
+    private static final Set<String> PUBLIC_EXTENSIONS = Set.of(
+            ".html", ".htm", ".css", ".js", ".mjs", ".json", ".svg", ".png", ".jpg",
+            ".jpeg", ".gif", ".webp", ".ico", ".woff2", ".txt");
 
     private final Path root;
     private final Path dbFile;
@@ -45,11 +52,11 @@ public final class Site {
     }
 
     /**
-     * Maps a URL path to a file inside the site, or null when there is no such page
-     * (or the path would escape the site folder).
+     * Maps a URL path to a file inside the site, or null when there is no such page,
+     * the path would escape the site folder, or the file is not public.
      *
      * <p>{@code /} and directories map to {@code index.why}; {@code /about} also tries
-     * {@code /about.why}, which is the old-school extension-free URL.
+     * {@code /about.why}, which is the extension-free URL.
      */
     public Path resolve(String urlPath) {
         String path = urlPath == null || urlPath.isEmpty() ? "/" : urlPath;
@@ -67,11 +74,45 @@ public final class Site {
                 if (Files.isRegularFile(withExtension)) found = withExtension;
             }
         }
-        return found == null || isImportOnly(found) ? null : found;
+        if (found == null || isImportOnly(found) || !isInsideSite(found) || isDatabase(found)) return null;
+        return isPage(found) || isPublicAsset(found) ? found : null;
+    }
+
+    /**
+     * Whether the real file is still under the real site root. This rejects
+     * symlinks and symlinked directories that point outside the site.
+     */
+    public boolean isInsideSite(Path file) {
+        try {
+            return file.toRealPath().startsWith(root.toRealPath());
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /** The configured database is never a public asset, whatever its filename or extension. */
+    private boolean isDatabase(Path file) {
+        try {
+            return file.toRealPath().equals(dbFile.toRealPath());
+        } catch (IOException e) {
+            return file.toAbsolutePath().normalize().equals(dbFile);
+        }
     }
 
     /** Files whose name starts with {@code _} can be imported but have no URL. */
     public static boolean isImportOnly(Path file) {
         return file.getFileName().toString().startsWith("_");
+    }
+
+    /**
+     * The static asset allowlist. Pages are handled separately. Dotfiles, database
+     * files, schema files, backups and unknown extensions are not public.
+     */
+    public static boolean isPublicAsset(Path file) {
+        String name = file.getFileName().toString();
+        if (name.startsWith(".")) return false;
+        int dot = name.lastIndexOf('.');
+        if (dot <= 0) return false;
+        return PUBLIC_EXTENSIONS.contains(name.substring(dot).toLowerCase(Locale.ROOT));
     }
 }

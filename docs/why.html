@@ -69,7 +69,7 @@
         <p>The other surprise was diagnostics. A language that parses a page on every request can afford to be precise: <code>file:line</code>, the source line and a caret, the partial or import chain, a spelling hint. <code>why check</code> turns the same work into a pre-flight check. Error messages are part of the page model, not an afterthought.</p>
 
         <h2 id="not">What it is not</h2>
-        <p>It is a proof of concept, not a production runtime. There is no sandbox — pages can run arbitrary SQL and read the database. There is no authentication, TLS, connection pooling, migration runner, or package manager. The flash store is in memory. The interpreter is a tree-walker and makes no performance promises.</p>
+        <p>It is a proof of concept, not a production runtime. There is no sandbox — pages can run arbitrary SQL and read the database. There is no authentication, TLS, connection pooling, migration runner, or package manager. The flash store is a bounded, expiring in-memory store. The interpreter is a tree-walker and makes no performance promises.</p>
         <p>Those are deliberate non-goals for now. The point was to build the smallest honest version of the page model and find out where it gets awkward. The <a href="https://github.com/slayyyyer/why-lang/blob/main/NOTES.md">notes</a> record the decisions and the things left out; the <a href="https://github.com/slayyyyer/why-lang/blob/main/FRICTION.md">friction log</a> records what the model made hard.</p>
 
         <hr>

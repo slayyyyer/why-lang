@@ -189,7 +189,7 @@ n     = db.exec("insert into posts (title) values (?)", title)</code></pre></div
         <p>Rows are hashes keyed by column label, so <code>{{it.title}}</code> and <code>post.title</code> work. If <code>data.db</code> does not exist when the server starts and <code>schema.sql</code> exists, the script runs once. There is no migration runner: changing the schema of an existing database is on you.</p>
 
         <h2 id="responses">Responses and flash</h2>
-        <p><code>redirect(path)</code> stops the page and answers <code>303 See Other</code>. There is no response object and no custom status or header API.</p>
+        <p><code>redirect("/path")</code> stops the page and answers <code>303 See Other</code>. The target must be a path-absolute same-origin path; absolute URLs and protocol-relative locations are rejected.</p>
         <p>The post/redirect/get pattern pairs with a one-shot flash:</p>
         <div class="code"><div class="code-title">controller + view</div><pre><code># controller
 if request.method == "POST"
@@ -200,7 +200,7 @@ end
 
 # view
 {{#if flash.notice}}&lt;p class="note"&gt;{{flash.notice}}&lt;/p&gt;{{/if}}</code></pre></div>
-        <p>The flash is stored in memory, keyed by a <code>why_session</code> cookie. The cookie is <code>HttpOnly</code> and <code>SameSite=Lax</code>. It is available on the next page request and gone after that. Restarting the server drops pending messages; there is no longer-lived session.</p>
+        <p>The flash is stored in a bounded, expiring in-memory store, keyed by a server-issued <code>why_session</code> cookie. The cookie is <code>HttpOnly</code> and <code>SameSite=Lax</code>; add <code>--secure-cookies</code> behind TLS. A message is available on the next page request and gone after that. Restarting the server drops pending messages; there is no longer-lived session.</p>
         <ul>
           <li>Unknown paths answer 404.</li>
           <li>POST to a static file answers 405.</li>
@@ -222,8 +222,14 @@ end
         <div class="code"><div class="code-title">terminal</div><pre><code># serve a folder on the default port, 8080
 java -jar target/why.jar ./site
 
-# choose a port and database file
-java -jar target/why.jar ./site --port 3000 --db ./site/data.db
+# choose a port and database file outside the site folder
+java -jar target/why.jar ./site --port 3000 --db ./data.db
+
+# generic 500 pages; details go to the server log
+java -jar target/why.jar ./site --production
+
+# behind TLS, mark session cookies Secure
+java -jar target/why.jar ./site --secure-cookies
 
 # parse and check every page without serving it
 java -jar target/why.jar check ./site</code></pre></div>

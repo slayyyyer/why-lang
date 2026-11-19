@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import why.lang.Ast;
+import why.lang.ExecutionBudget;
 import why.lang.Interpreter;
 import why.lang.Scope;
 import why.tpl.Template;
@@ -60,9 +61,14 @@ public final class Program {
 
     /** Runs the controller against the request globals, then renders the view. */
     public String render(Map<String, Object> globals) {
+        return render(globals, ExecutionBudget.unlimited());
+    }
+
+    /** Runs the controller and view under explicit step/output/deadline limits. */
+    public String render(Map<String, Object> globals, ExecutionBudget budget) {
         Scope scope = new Scope(null);
         globals.forEach(scope::define);
-        Interpreter interpreter = new Interpreter(defs, scope);
+        Interpreter interpreter = new Interpreter(defs, scope, budget);
         try {
             interpreter.exec(body, scope);
         } catch (WhyError e) {

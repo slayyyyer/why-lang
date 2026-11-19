@@ -15,4 +15,16 @@ public final class Redirect extends RuntimeException {
     public String location() {
         return location;
     }
+
+    /** Only path-absolute locations on this origin are allowed. */
+    public static boolean isSameOriginPath(String target) {
+        if (target == null || target.isEmpty() || !target.startsWith("/") || target.startsWith("//")) {
+            return false;
+        }
+        if (target.indexOf('\\') >= 0) return false;
+        for (int i = 0; i < target.length(); i++) {
+            if (Character.isISOControl(target.charAt(i))) return false;
+        }
+        return true;
+    }
 }

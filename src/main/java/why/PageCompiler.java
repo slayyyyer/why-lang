@@ -1,5 +1,6 @@
 package why;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -40,7 +41,7 @@ public final class PageCompiler {
         Map<String, Template> partials = new LinkedHashMap<>();
         Map<Template, List<WhyError.Frame>> origins = new LinkedHashMap<>();
         List<Path> stack = new ArrayList<>();
-        stack.add(file.toAbsolutePath().normalize());
+        stack.add(canonical(file));
         collect(page, display, defs, partials, stack, List.of(), origins, defOrigins);
 
         Template view = TemplateParser.parse(page.viewSource(), display, page.viewLine());
@@ -76,7 +77,7 @@ public final class PageCompiler {
                 if (imported == null) {
                     throw new WhyError("cannot find import '" + imp.name() + "'", display, imp.line());
                 }
-                Path normalized = imported.toAbsolutePath().normalize();
+                Path normalized = canonical(imported);
                 if (stack.contains(normalized)) {
                     throw new WhyError("circular import '" + imp.name() + "'", display, imp.line());
                 }
@@ -106,11 +107,22 @@ public final class PageCompiler {
         }
     }
 
+    /** Resolves symlink aliases so a symlinked import cannot evade cycle detection. */
+    private static Path canonical(Path file) {
+        try {
+            return file.toRealPath();
+        } catch (IOException e) {
+            return file.toAbsolutePath().normalize();
+        }
+    }
+
     private Path resolve(Path pageFile, String name) {
         Path directory = pageFile.toAbsolutePath().getParent();
         Path local = directory == null ? null : directory.resolve(name + Site.PAGE_EXTENSION);
-        if (local != null && Files.isRegularFile(local)) return local.normalize();
+        if (local != null && Files.isRegularFile(local)) {
+            return site.isInsideSite(local) ? local.normalize() : null;
+        }
         Path inRoot = site.root().resolve(name + Site.PAGE_EXTENSION).normalize();
-        return Files.isRegularFile(inRoot) ? inRoot : null;
+        return Files.isRegularFile(inRoot) && site.isInsideSite(inRoot) ? inRoot : null;
     }
 }

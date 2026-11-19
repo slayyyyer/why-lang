@@ -21,14 +21,32 @@ public final class Interpreter {
 
     private static final Object NEXT = new Object();
     private static final Object BREAK = new Object();
+    private static final int MAX_CALL_DEPTH = 256;
 
     private final Map<String, Function> functions = new HashMap<>();
+    private final ExecutionBudget budget;
+    private int callDepth;
 
     public Interpreter(Map<String, Ast.Def> defs, Scope globals) {
+        this(defs, globals, ExecutionBudget.unlimited());
+    }
+
+    public Interpreter(Map<String, Ast.Def> defs, Scope globals, ExecutionBudget budget) {
+        this.budget = budget;
         for (Map.Entry<String, Ast.Def> entry : defs.entrySet()) {
             Ast.Def def = entry.getValue();
             functions.put(entry.getKey(), new Function(def.params(), def.body(), globals, def.file()));
         }
+    }
+
+    /** Counts one interpreter operation against the current request budget. */
+    public void step() {
+        budget.step();
+    }
+
+    /** Counts rendered characters against the current request budget. */
+    public void output(int chars) {
+        budget.output(chars);
     }
 
     public void exec(List<Ast.Stmt> body, Scope scope) {
@@ -50,6 +68,7 @@ public final class Interpreter {
     }
 
     private void exec(Ast.Stmt stmt, Scope scope) {
+        budget.step();
         if (stmt instanceof Ast.Assign assign) {
             Object value = eval(assign.value(), scope);
             if (!assign.op().equals("=")) {
@@ -91,6 +110,7 @@ public final class Interpreter {
     }
 
     public Object eval(Ast.Expr expr, Scope scope) {
+        budget.step();
         if (expr instanceof Ast.IntLit lit) return lit.value();
         if (expr instanceof Ast.FloatLit lit) return lit.value();
         if (expr instanceof Ast.StrLit lit) return lit.value();
@@ -98,7 +118,11 @@ public final class Interpreter {
         if (expr instanceof Ast.NilLit) return null;
         if (expr instanceof Ast.Interp interp) {
             StringBuilder out = new StringBuilder();
-            for (Ast.Expr part : interp.parts()) out.append(Value.str(eval(part, scope)));
+            for (Ast.Expr part : interp.parts()) {
+                String text = Value.str(eval(part, scope));
+                budget.output(text.length());
+                out.append(text);
+            }
             return out.toString();
         }
         if (expr instanceof Ast.ArrayLit array) {
@@ -136,7 +160,9 @@ public final class Interpreter {
             Object left = eval(expr.left(), scope);
             return Value.truthy(left) ? left : eval(expr.right(), scope);
         }
-        return Value.binary(expr.op(), eval(expr.left(), scope), eval(expr.right(), scope), expr.line());
+        Object result = Value.binary(expr.op(), eval(expr.left(), scope), eval(expr.right(), scope), expr.line());
+        if (result instanceof String text) budget.output(text.length());
+        return result;
     }
 
     // ---- calls ---------------------------------------------------------
@@ -157,6 +183,10 @@ public final class Interpreter {
     }
 
     private Object invoke(Function fn, List<Object> args) {
+        if (callDepth >= MAX_CALL_DEPTH) {
+            throw new WhyError("call depth budget exceeded");
+        }
+        callDepth++;
         Scope scope = fn.closure().child();
         for (int i = 0; i < fn.params().size(); i++) {
             scope.define(fn.params().get(i), i < args.size() ? args.get(i) : null);
@@ -167,6 +197,8 @@ public final class Interpreter {
             return signal.value;
         } catch (WhyError e) {
             throw e.locate(fn.file(), e.line());
+        } finally {
+            callDepth--;
         }
     }
 
@@ -190,8 +222,8 @@ public final class Interpreter {
 
     private static String redirectTarget(Object arg, int line) {
         String target = Value.str(arg);
-        if (target.isEmpty() || target.indexOf('\r') >= 0 || target.indexOf('\n') >= 0) {
-            throw new WhyError("redirect needs a path without newlines", null, line);
+        if (!Redirect.isSameOriginPath(target)) {
+            throw new WhyError("redirect needs a same-origin path starting with '/'", null, line);
         }
         return target;
     }
@@ -248,12 +280,16 @@ public final class Interpreter {
                 }
                 case "sum" -> {
                     Object total = 0L;
-                    for (Object item : list) total = Value.binary("+", total, item, line);
+                    for (Object item : list) {
+                        budget.step();
+                        total = Value.binary("+", total, item, line);
+                    }
                     yield total;
                 }
                 case "each" -> {
                     requireBlock(block, "each", line);
                     for (Object item : new ArrayList<>(list)) {
+                        budget.step();
                         if (step(block, Collections.singletonList(item)) == BREAK) break;
                     }
                     yield null;
@@ -262,6 +298,7 @@ public final class Interpreter {
                     requireBlock(block, "map", line);
                     List<Object> out = new ArrayList<>();
                     for (Object item : list) {
+                        budget.step();
                         Object result = step(block, Collections.singletonList(item));
                         if (result == BREAK) break;
                         out.add(result == NEXT ? null : result);
@@ -272,6 +309,7 @@ public final class Interpreter {
                     requireBlock(block, "select", line);
                     List<Object> out = new ArrayList<>();
                     for (Object item : list) {
+                        budget.step();
                         Object result = step(block, Collections.singletonList(item));
                         if (result == BREAK) break;
                         if (result != NEXT && Value.truthy(result)) out.add(item);
@@ -293,6 +331,7 @@ public final class Interpreter {
                 case "each" -> {
                     requireBlock(block, "each", line);
                     for (Map.Entry<Object, Object> entry : new ArrayList<>(map.entrySet())) {
+                        budget.step();
                         if (step(block, Arrays.asList(entry.getKey(), entry.getValue())) == BREAK) break;
                     }
                     yield null;
@@ -388,13 +427,15 @@ public final class Interpreter {
         }
     }
 
-    private static String join(List<Object> list, Object separator) {
+    private String join(List<Object> list, Object separator) {
         String sep = Value.str(separator);
         StringBuilder out = new StringBuilder();
         for (int i = 0; i < list.size(); i++) {
+            budget.step();
             if (i > 0) out.append(sep);
             out.append(Value.str(list.get(i)));
         }
+        budget.output(out.length());
         return out.toString();
     }
 
