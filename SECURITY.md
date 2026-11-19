@@ -23,12 +23,17 @@ Treat an exposed Why deployment as a prototype service and put the following con
 - **Keep the database outside the web root.** Pass an explicit `--db` path such as
   `/var/lib/why/data.db`, rather than leaving `data.db` inside the served site folder. The static
   file resolver blocks the configured database, but keeping it outside the site is defense in depth.
+- **Keep the default response headers.** Every response sets `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, `Content-Security-Policy: frame-ancestors 'none'` and
+  `X-Frame-Options: DENY`. A page may opt into a fuller CSP with `response.csp("...")`; keep
+  `frame-ancestors` restrictive in any policy it sets.
 - **Maintain regular backups.** Back up the SQLite database and the site content, protect backup
   confidentiality and access, and test restores. Backups belong outside the web root as well.
 
-Also use `--production` so error responses do not expose source paths, source excerpts, SQL errors
-or stack traces, and review the service's logs and network access. The built-in request limits are
-not a substitute for a reverse proxy, authentication, authorization, rate limiting or a hardened
-multi-tenant runtime.
+Development diagnostics are off by default; leave `--dev` off so error responses do not expose
+source paths, source excerpts, SQL errors or stack traces. Why binds to loopback by default; only
+use `--host` when a reverse proxy on another host must reach it, and review the service's logs and
+network access. The built-in request and allocation limits are not a substitute for a reverse proxy,
+authentication, authorization, rate limiting or a hardened multi-tenant runtime.
 
 See the README's [Security section](README.md#security) for the short operational checklist.

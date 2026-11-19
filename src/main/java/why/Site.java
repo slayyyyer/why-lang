@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -117,6 +118,19 @@ public final class Site {
             return file.toRealPath().startsWith(root.toRealPath());
         } catch (IOException e) {
             return false;
+        }
+    }
+
+    /** One source line for a diagnostic, or null when the path is outside the site or unreadable. */
+    String sourceLine(String file, int line) {
+        if (file == null || line <= 0) return null;
+        Path path = root.resolve(file).normalize();
+        if (!path.startsWith(root) || !isInsideSite(path) || !Files.isRegularFile(path)) return null;
+        try {
+            List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
+            return line <= lines.size() ? lines.get(line - 1) : null;
+        } catch (IOException e) {
+            return null;
         }
     }
 

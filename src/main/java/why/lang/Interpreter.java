@@ -232,10 +232,20 @@ public final class Interpreter {
         if (receiver == null) throw new WhyError("nil has no method '" + name + "'", null, line);
         Object first = args.isEmpty() ? null : args.get(0);
 
+        if (receiver instanceof Response response) {
+            return switch (name) {
+                case "csp" -> {
+                    response.csp(Value.str(first), line);
+                    yield null;
+                }
+                default -> throw new WhyError("response has no method '" + name + "' (try csp)", null, line);
+            };
+        }
+
         if (receiver instanceof Flash flash) {
             return switch (name) {
                 case "set" -> {
-                    flash.set(Value.str(first), args.size() > 1 ? args.get(1) : null);
+                    flash.set(Value.str(first), args.size() > 1 ? args.get(1) : null, line);
                     yield null;
                 }
                 case "get" -> flash.get(Value.str(first));

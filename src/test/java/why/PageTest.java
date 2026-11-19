@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -112,6 +113,51 @@ class PageTest {
 
         String html = new PageCompiler(new Site(dir)).compile(page).render(Map.of());
         assertEquals("<header>why</header>\n\n<h1>HELLO!</h1>\n", html);
+    }
+
+    @Test
+    void symlinkedImportsCannotHideACycle() throws IOException {
+        Path a = write("a.why", "imports:\nb\n\nview:\n{{> b}}\n");
+        write("b.why", "imports:\nalias\n\nview:\n{{> alias}}\n");
+        Path alias = dir.resolve("alias.why");
+        Assumptions.assumeTrue(createFileLink(alias, a), "file symlinks are unavailable");
+
+        try {
+            WhyError error = assertThrows(WhyError.class, () -> new PageCompiler(new Site(dir)).compile(a));
+            assertTrue(error.getMessage().contains("circular import 'alias'"), error.getMessage());
+        } finally {
+            Files.deleteIfExists(alias);
+        }
+    }
+
+    /** A file symlink; false when the platform or account does not allow one. */
+    private static boolean createFileLink(Path link, Path target) {
+        try {
+            Files.createSymbolicLink(link, target);
+            return true;
+        } catch (UnsupportedOperationException | IOException e) {
+            return false;
+        }
+    }
+
+    @Test
+    void pagesLargerThanTheLimitAreRejected() throws IOException {
+        Path file = write("big.why", "view:\n" + "x".repeat((int) AllocationLimits.PAGE_BYTES));
+
+        WhyError error = assertThrows(WhyError.class, () -> new PageLoader(new Site(dir)).load(file));
+        assertEquals("big.why", error.file());
+        assertTrue(error.getMessage().contains("limit"), error.getMessage());
+        assertTrue(error.getMessage().contains(String.valueOf(AllocationLimits.PAGE_BYTES)), error.getMessage());
+    }
+
+    @Test
+    void oversizedImportsAreRejected() throws IOException {
+        write("big.why", "view:\n" + "x".repeat((int) AllocationLimits.PAGE_BYTES));
+        Path page = write("uses.why", "imports:\nbig\n\nview:\nok\n");
+
+        WhyError error = assertThrows(WhyError.class, () -> new PageCompiler(new Site(dir)).compile(page));
+        assertTrue(error.getMessage().contains("big.why"), error.getMessage());
+        assertTrue(error.getMessage().contains("limit"), error.getMessage());
     }
 
     @Test

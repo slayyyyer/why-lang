@@ -2,6 +2,7 @@ package why;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -13,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
@@ -55,7 +57,7 @@ class ServerTest {
             db.exec("insert into posts (id, title) values (1, 'first'), (2, 'second')", List.of());
         }
 
-        server = new WhyServer(new Site(dir), 0);
+        server = new WhyServer(new Site(dir), "127.0.0.1", 0, true, false);
         server.start();
         client = HttpClient.newHttpClient();
     }
@@ -82,12 +84,47 @@ class ServerTest {
         return client.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
+    private static String header(HttpResponse<String> response, String name) {
+        return response.headers().firstValue(name).orElse("");
+    }
+
     private HttpResponse<String> post(String path, String body) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + path))
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    void bindsToLoopbackByDefault() throws Exception {
+        server.stop();
+        server = new WhyServer(new Site(dir), 0);
+        server.start();
+
+        assertTrue(server.address().getAddress().isLoopbackAddress());
+        assertEquals(200, get("/").statusCode());
+    }
+
+    @Test
+    void explicitHostCanExposeTheServer() throws Exception {
+        server.stop();
+        server = new WhyServer(new Site(dir), "0.0.0.0", 0, false, false);
+        server.start();
+
+        assertTrue(server.address().getAddress().isAnyLocalAddress());
+    }
+
+    @Test
+    void developmentDiagnosticsAreOptIn() throws Exception {
+        server.stop();
+        server = new WhyServer(new Site(dir), "127.0.0.1", 0, true, false);
+        server.start();
+
+        HttpResponse<String> response = get("/broken");
+        assertEquals(500, response.statusCode());
+        assertTrue(response.body().contains("broken.why:2"));
+        assertTrue(response.body().contains("unexpected end of input"));
     }
 
     @Test
@@ -107,12 +144,76 @@ class ServerTest {
     }
 
     @Test
+    void sendsNosniffByDefault() throws Exception {
+        assertEquals("nosniff", header(get("/"), "x-content-type-options"));
+    }
+
+    @Test
+    void sendsReferrerPolicyByDefault() throws Exception {
+        assertEquals("no-referrer", header(get("/"), "referrer-policy"));
+    }
+
+    @Test
+    void sendsFrameAncestorsByDefault() throws Exception {
+        assertEquals("frame-ancestors 'none'", header(get("/"), "content-security-policy"));
+    }
+
+    @Test
+    void sendsXFrameOptionsByDefault() throws Exception {
+        assertEquals("DENY", header(get("/"), "x-frame-options"));
+    }
+
+    @Test
+    void pagesCanOptIntoAContentSecurityPolicy() throws Exception {
+        write("csp.why", """
+                controller:
+                response.csp("default-src 'self'; img-src 'self' data:")
+
+                view:
+                <h1>ok</h1>
+                """);
+        write("framed.why", """
+                controller:
+                response.csp("frame-ancestors 'self'")
+
+                view:
+                <h1>framed</h1>
+                """);
+
+        assertEquals("default-src 'self'; img-src 'self' data:; frame-ancestors 'none'",
+                header(get("/csp"), "content-security-policy"));
+        assertEquals("frame-ancestors 'self'", header(get("/framed"), "content-security-policy"));
+    }
+
+    @Test
     void servesStaticFilesAndReportsMisses() throws Exception {
         HttpResponse<String> css = get("/style.css");
         assertEquals(200, css.statusCode());
         assertEquals("text/css; charset=utf-8", css.headers().firstValue("content-type").orElse(""));
         assertEquals("body{color:red}\n", css.body());
         assertEquals(404, get("/nope").statusCode());
+    }
+
+    @Test
+    void oversizedStaticAssetsAreRejected() throws Exception {
+        Files.write(dir.resolve("big.css"), new byte[(int) AllocationLimits.STATIC_ASSET_BYTES + 1]);
+
+        HttpResponse<String> response = get("/big.css");
+        assertEquals(500, response.statusCode());
+        assertTrue(response.body().contains("static asset"), response.body());
+        assertTrue(response.body().contains("limit"), response.body());
+    }
+
+    @Test
+    void oversizedFlashValuesAreRejected() throws Exception {
+        write("big-flash.why", "controller:\nflash.set(\"notice\", \""
+                + "x".repeat(AllocationLimits.FLASH_VALUE_BYTES + 1)
+                + "\")\n\nview:\nok\n");
+
+        HttpResponse<String> response = get("/big-flash");
+        assertEquals(500, response.statusCode());
+        assertTrue(response.body().contains("flash value"), response.body());
+        assertTrue(response.body().contains("" + AllocationLimits.FLASH_VALUE_BYTES), response.body());
     }
 
     @Test
@@ -132,6 +233,35 @@ class ServerTest {
                 .build();
 
         assertEquals(431, client.send(request, HttpResponse.BodyHandlers.ofString()).statusCode());
+    }
+
+    @Test
+    void slowQueriesStopAtTheRequestTimeoutAndReleaseTheirSlot() throws Exception {
+        write("slow-query.why", """
+                controller:
+                db.query("with recursive cnt(x) as (select 1 union all select x + 1 from cnt limit 1000000000) select sum(x) from cnt")
+
+                view:
+                never
+                """);
+
+        server.stop();
+        server = new WhyServer(new Site(dir), "127.0.0.1", 0, true, false, 500);
+        server.start();
+
+        long started = System.nanoTime();
+        try {
+            assertEquals(504, get("/slow-query").statusCode());
+        } catch (IOException e) {
+            // The watchdog may close the exchange before the 504 is sent.
+        }
+        long elapsedMillis = (System.nanoTime() - started) / 1_000_000;
+        assertTrue(elapsedMillis >= 400, "request did not wait for the timeout: " + elapsedMillis + "ms");
+        assertTrue(elapsedMillis < 5_000, "request took " + elapsedMillis + "ms");
+
+        long waitUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (server.freeRequestSlots() < 32 && System.nanoTime() < waitUntil) Thread.sleep(20);
+        assertEquals(32, server.freeRequestSlots(), "timed-out request still holds its slot");
     }
 
     @Test
@@ -176,27 +306,48 @@ class ServerTest {
         Path link = dir.resolve("linked");
         try {
             Files.writeString(secret, "secret", StandardCharsets.UTF_8);
-            boolean created = false;
-            try {
-                Files.createSymbolicLink(link, outside);
-                created = true;
-            } catch (UnsupportedOperationException | IOException e) {
-                if (isWindows()) {
-                    Process process = new ProcessBuilder(
-                            "cmd", "/c", "mklink", "/J", link.toString(), outside.toString())
-                            .redirectErrorStream(true)
-                            .start();
-                    process.getInputStream().readAllBytes();
-                    created = process.waitFor() == 0;
-                }
-            }
-            Assumptions.assumeTrue(created, "symbolic links or junctions are unavailable");
+            Assumptions.assumeTrue(createDirectoryLink(link, outside), "symbolic links or junctions are unavailable");
 
             assertEquals(404, get("/linked/secret.css").statusCode());
         } finally {
             deleteLink(link);
             Files.deleteIfExists(secret);
             Files.deleteIfExists(outside);
+        }
+    }
+
+    @Test
+    void diagnosticSourceLinesDoNotFollowLinksOutsideTheSite() throws Exception {
+        Path outside = Files.createTempDirectory("why-outside-");
+        Path secret = outside.resolve("secret.why");
+        Path link = dir.resolve("diagnostics");
+        try {
+            Files.writeString(secret, "outside secret", StandardCharsets.UTF_8);
+            Assumptions.assumeTrue(createDirectoryLink(link, outside), "symbolic links or junctions are unavailable");
+
+            Site site = new Site(dir);
+            assertEquals("if", site.sourceLine("broken.why", 2));
+            assertNull(site.sourceLine("diagnostics/secret.why", 1));
+        } finally {
+            deleteLink(link);
+            Files.deleteIfExists(secret);
+            Files.deleteIfExists(outside);
+        }
+    }
+
+    /** A directory symlink, or a Windows junction; false when neither is available. */
+    private static boolean createDirectoryLink(Path link, Path target) throws Exception {
+        try {
+            Files.createSymbolicLink(link, target);
+            return true;
+        } catch (UnsupportedOperationException | IOException e) {
+            if (!isWindows()) return false;
+            Process process = new ProcessBuilder(
+                    "cmd", "/c", "mklink", "/J", link.toString(), target.toString())
+                    .redirectErrorStream(true)
+                    .start();
+            process.getInputStream().readAllBytes();
+            return process.waitFor() == 0;
         }
     }
 
@@ -225,7 +376,7 @@ class ServerTest {
     }
 
     @Test
-    void productionErrorsAreGenericAndDoNotLeakDetails() throws Exception {
+    void errorsAreGenericAndDoNotLeakSourceOrSqlByDefault() throws Exception {
         write("db-error.why", """
                 controller:
                 db.query("select * from missing")
@@ -235,7 +386,7 @@ class ServerTest {
                 """);
 
         server.stop();
-        server = new WhyServer(new Site(dir), 0, true);
+        server = new WhyServer(new Site(dir), 0);
         server.start();
 
         HttpResponse<String> syntaxError = get("/broken");
@@ -407,7 +558,7 @@ class ServerTest {
                 """);
 
         server.stop();
-        server = new WhyServer(new Site(dir), 0, false, true);
+        server = new WhyServer(new Site(dir), "127.0.0.1", 0, true, true);
         server.start();
 
         HttpResponse<String> posted = post("/notice", "");

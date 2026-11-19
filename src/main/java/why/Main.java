@@ -12,9 +12,10 @@ import why.lang.Db;
 public final class Main {
     public static void main(String[] args) {
         Path directory = Path.of(".");
+        String host = "127.0.0.1";
         int port = 8080;
         Path db = null;
-        boolean production = false;
+        boolean diagnostics = false;
         boolean secureCookies = false;
         boolean check = args.length > 0 && args[0].equals("check");
 
@@ -38,6 +39,13 @@ public final class Main {
                         return;
                     }
                 }
+                case "--host" -> {
+                    if (check) {
+                        fail("check does not take " + arg);
+                        return;
+                    }
+                    host = value(args, ++i, arg);
+                }
                 case "--db" -> {
                     if (check) {
                         fail("check does not take " + arg);
@@ -45,12 +53,12 @@ public final class Main {
                     }
                     db = Path.of(value(args, ++i, arg));
                 }
-                case "--production" -> {
+                case "--dev" -> {
                     if (check) {
                         fail("check does not take " + arg);
                         return;
                     }
-                    production = true;
+                    diagnostics = true;
                 }
                 case "--secure-cookies" -> {
                     if (check) {
@@ -103,9 +111,10 @@ public final class Main {
 
         Site site = new Site(root, dbFile);
         try {
-            WhyServer server = new WhyServer(site, port, production, secureCookies);
+            WhyServer server = new WhyServer(site, host, port, diagnostics, secureCookies);
             server.start();
-            System.out.println("Why is serving " + root + " at http://localhost:" + server.port());
+            String shownHost = server.address().getAddress().isLoopbackAddress() ? "localhost" : host;
+            System.out.println("Why is serving " + root + " at http://" + shownHost + ":" + server.port());
             System.out.println("press Ctrl+C to stop");
             Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
             new CountDownLatch(1).await();
@@ -136,8 +145,9 @@ public final class Main {
                   site              folder of .why pages (default: .)
                   check             compile every page, report problems, print the page map
                   -p, --port PORT   port to listen on (default: 8080)
+                      --host HOST   interface to bind (default: 127.0.0.1; use 0.0.0.0 to expose)
                       --db FILE     SQLite database file (default: <site>/data.db)
-                      --production  return generic 500 pages; log details server-side
+                      --dev         show source, SQL errors and stack traces in 500 pages
                       --secure-cookies  mark session cookies Secure (use with TLS)
                   -h, --help        show this help
 

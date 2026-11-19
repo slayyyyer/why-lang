@@ -50,11 +50,11 @@ The specification I was given ends in the middle of the `imports:` rules, so the
 - Urlencoded POST bodies are parsed into `form`, `redirect(path)` answers 303, and a one-shot
   `flash` global carries messages across a redirect using an in-memory `why_session` cookie. The
   cookie is `HttpOnly` and `SameSite=Lax`. Multipart bodies, uploads, general cookies,
-  longer-lived sessions, custom headers and other statuses are still out. The awkward parts are recorded in [FRICTION.md](FRICTION.md).
+  longer-lived sessions, general custom headers and other statuses are still out; a page can set a Content-Security-Policy with `response.csp(...)`. The awkward parts are recorded in [FRICTION.md](FRICTION.md).
 - Custom 404 pages, directory listings, configurable index files.
 - A JSON helper (`render json:`). The spec allows Jackson or Gson, but nothing needed JSON yet,
   so the dependency was left out.
-- Multiple sites per server, TLS, access control, request timeouts, size limits.
+- Multiple sites per server, TLS and access control.
 - Sandboxing and security hardening (explicit non-goal): pages can run arbitrary SQL and read the
   whole database.
 

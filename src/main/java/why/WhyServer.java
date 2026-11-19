@@ -26,6 +26,7 @@ import why.lang.Db;
 import why.lang.ExecutionBudget;
 import why.lang.Flash;
 import why.lang.Redirect;
+import why.lang.Response;
 import why.util.Html;
 
 /** The HTTP server: one handler, virtual threads, every request compiled and rendered from disk. */
@@ -42,27 +43,33 @@ public final class WhyServer {
     private final Site site;
     private final PageCompiler compiler;
     private final HttpServer server;
-    private final boolean production;
+    private final boolean diagnostics;
     private final boolean secureCookies;
+    private final long requestTimeoutMillis;
     private final Semaphore requestSlots = new Semaphore(MAX_CONCURRENT_REQUESTS);
     private final ScheduledExecutorService timeouts;
     /** Bounded, expiring one-shot flashes keyed by server-issued session IDs. */
     private final FlashStore flashes = new FlashStore();
 
+    /** Binds loopback with no development diagnostics. */
     public WhyServer(Site site, int port) throws IOException {
-        this(site, port, false, false);
+        this(site, "127.0.0.1", port, false, false);
     }
 
-    public WhyServer(Site site, int port, boolean production) throws IOException {
-        this(site, port, production, false);
+    public WhyServer(Site site, String host, int port, boolean diagnostics, boolean secureCookies)
+            throws IOException {
+        this(site, host, port, diagnostics, secureCookies, REQUEST_TIMEOUT_MILLIS);
     }
 
-    public WhyServer(Site site, int port, boolean production, boolean secureCookies) throws IOException {
+    /** Package-private so tests can exercise the timeout quickly. */
+    WhyServer(Site site, String host, int port, boolean diagnostics, boolean secureCookies,
+            long requestTimeoutMillis) throws IOException {
         this.site = site;
         this.compiler = new PageCompiler(site);
-        this.server = HttpServer.create(new InetSocketAddress(port), 0);
-        this.production = production;
+        this.server = HttpServer.create(new InetSocketAddress(host, port), 0);
+        this.diagnostics = diagnostics;
         this.secureCookies = secureCookies;
+        this.requestTimeoutMillis = requestTimeoutMillis;
         this.timeouts = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "why-request-timeout");
             thread.setDaemon(true);
@@ -76,6 +83,16 @@ public final class WhyServer {
         return server.getAddress().getPort();
     }
 
+    /** The bound address, for the startup message and tests. */
+    InetSocketAddress address() {
+        return server.getAddress();
+    }
+
+    /** Visible for tests: request slots not currently held by a handler. */
+    int freeRequestSlots() {
+        return requestSlots.availablePermits();
+    }
+
     public void start() {
         server.start();
     }
@@ -87,6 +104,7 @@ public final class WhyServer {
 
     private void handle(HttpExchange exchange) throws IOException {
         long started = System.nanoTime();
+        setSecurityHeaders(exchange);
         String method = exchange.getRequestMethod();
         String path = exchange.getRequestURI().getPath();
         int status = 500;
@@ -123,7 +141,7 @@ public final class WhyServer {
                     requestThread.interrupt();
                     exchange.close();
                 }
-            }, REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            }, requestTimeoutMillis, TimeUnit.MILLISECONDS);
 
             Path file = site.resolve(path);
             if (file == null) {
@@ -158,9 +176,9 @@ public final class WhyServer {
             status = 500;
             e.printStackTrace();
             try {
-                sendHtml(exchange, 500, production
-                        ? productionErrorPage()
-                        : errorPage("Internal error", String.valueOf(e), ""));
+                sendHtml(exchange, 500, diagnostics
+                        ? errorPage("Internal error", String.valueOf(e), "")
+                        : internalErrorPage());
             } catch (IOException ignored) {
                 // The response may already be committed; nothing else to send.
             }
@@ -217,11 +235,13 @@ public final class WhyServer {
             }
         }
         Flash flash = new Flash(carried);
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(REQUEST_TIMEOUT_MILLIS);
+        Response page = new Response();
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(requestTimeoutMillis);
         String html;
         try {
             Program program = compiler.compile(file);
             Map<String, Object> globals = globals(exchange, flash);
+            globals.put("response", page);
             try (Db db = new Db(site.dbFile())) {
                 globals.put("db", db);
                 html = program.render(globals,
@@ -247,10 +267,11 @@ public final class WhyServer {
             persistFlash(exchange, sessionId, flash);
             WhyError located = e.locate(display, e.line());
             System.err.println("why: " + located);
-            sendHtml(exchange, 500, production ? productionErrorPage() : whyErrorPage(located));
+            sendHtml(exchange, 500, diagnostics ? whyErrorPage(located) : internalErrorPage());
             return 500;
         }
         persistFlash(exchange, sessionId, flash);
+        applyPageCsp(exchange, page);
         sendHtml(exchange, 200, html);
         return 200;
     }
@@ -293,8 +314,18 @@ public final class WhyServer {
 
     private int serveStatic(HttpExchange exchange, Path file) throws IOException {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
-        send(exchange, 200, contentType(name), Files.readAllBytes(file));
+        long size = Files.size(file);
+        if (size > AllocationLimits.STATIC_ASSET_BYTES) throw assetTooLarge(file, size);
+        byte[] body = Files.readAllBytes(file);
+        if (body.length > AllocationLimits.STATIC_ASSET_BYTES) throw assetTooLarge(file, body.length);
+        send(exchange, 200, contentType(name), body);
         return 200;
+    }
+
+    private WhyError assetTooLarge(Path file, long bytes) {
+        String display = site.relative(file);
+        return new WhyError("static asset '" + display + "' is " + bytes + " bytes; the limit is "
+                + AllocationLimits.STATIC_ASSET_BYTES, display, 0);
     }
 
     private Map<String, Object> globals(HttpExchange exchange, Flash flash) {
@@ -364,6 +395,25 @@ public final class WhyServer {
         }
     }
 
+    /** Headers every response gets; a page may replace the CSP through {@code response.csp}. */
+    private static void setSecurityHeaders(HttpExchange exchange) {
+        exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+        exchange.getResponseHeaders().set("Referrer-Policy", "no-referrer");
+        exchange.getResponseHeaders().set("Content-Security-Policy", "frame-ancestors 'none'");
+        exchange.getResponseHeaders().set("X-Frame-Options", "DENY");
+    }
+
+    /** Applies a page's opt-in CSP while keeping frame protection in the policy. */
+    private static void applyPageCsp(HttpExchange exchange, Response page) {
+        String policy = page.csp();
+        if (policy == null) return;
+        if (!policy.toLowerCase(Locale.ROOT).contains("frame-ancestors")) {
+            if (policy.endsWith(";")) policy = policy.substring(0, policy.length() - 1).stripTrailing();
+            policy += "; frame-ancestors 'none'";
+        }
+        exchange.getResponseHeaders().set("Content-Security-Policy", policy);
+    }
+
     private void sendHtml(HttpExchange exchange, int status, String html) throws IOException {
         send(exchange, status, "text/html; charset=utf-8", html.getBytes(StandardCharsets.UTF_8));
     }
@@ -426,7 +476,7 @@ public final class WhyServer {
             body.append("<p class=\"loc\">").append(Html.escape(error.location())).append("</p>");
         }
 
-        String source = sourceLine(error.file(), error.line());
+        String source = site.sourceLine(error.file(), error.line());
         if (source != null) {
             source = clip(source).replace("\t", "    ");
             int column = caretColumn(source, error.getMessage());
@@ -445,7 +495,7 @@ public final class WhyServer {
                 body.append("<li><code>")
                         .append(Html.escape(frame.file() + ":" + frame.line()))
                         .append("</code>");
-                String callSite = sourceLine(frame.file(), frame.line());
+                String callSite = site.sourceLine(frame.file(), frame.line());
                 if (callSite != null) body.append(" ").append(Html.escape(clip(callSite).strip()));
                 body.append("</li>");
             }
@@ -453,19 +503,6 @@ public final class WhyServer {
         }
 
         return layout("Why error", body.toString());
-    }
-
-    /** One source line, or null when the file or line is unavailable. */
-    private String sourceLine(String file, int line) {
-        if (file == null || line <= 0) return null;
-        Path path = site.root().resolve(file).normalize();
-        if (!path.startsWith(site.root()) || !site.isInsideSite(path) || !Files.isRegularFile(path)) return null;
-        try {
-            List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
-            return line <= lines.size() ? lines.get(line - 1) : null;
-        } catch (IOException e) {
-            return null;
-        }
     }
 
     /**
@@ -491,7 +528,7 @@ public final class WhyServer {
     }
 
     /** A 500 response with no paths, source, SQL or stack details. */
-    private static String productionErrorPage() {
+    private static String internalErrorPage() {
         return layout("Internal server error",
                 "<h1>500 — Internal server error</h1><p>The server could not complete this request.</p>");
     }

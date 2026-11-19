@@ -16,6 +16,11 @@ public final class PageLoader {
     private static final Pattern LABEL = Pattern.compile("^([A-Za-z_][A-Za-z0-9_]*):$");
     private static final Pattern NAME = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
 
+    private static WhyError pageTooLarge(String display, long bytes) {
+        return new WhyError("page '" + display + "' is " + bytes + " bytes; the limit is "
+                + AllocationLimits.PAGE_BYTES, display, 0);
+    }
+
     private final Site site;
 
     public PageLoader(Site site) {
@@ -23,13 +28,17 @@ public final class PageLoader {
     }
 
     public Page load(Path file) {
+        String display = site.relative(file);
         String text;
         try {
+            long size = Files.size(file);
+            if (size > AllocationLimits.PAGE_BYTES) throw pageTooLarge(display, size);
             text = Files.readString(file, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new WhyError("cannot read page: " + e.getMessage(), site.relative(file), 0);
+            throw new WhyError("cannot read page: " + e.getMessage(), display, 0);
         }
-        String display = site.relative(file);
+        long bytes = text.getBytes(StandardCharsets.UTF_8).length;
+        if (bytes > AllocationLimits.PAGE_BYTES) throw pageTooLarge(display, bytes);
 
         List<String> lines = new ArrayList<>(List.of(text.split("\n", -1)));
         if (!lines.isEmpty() && lines.get(lines.size() - 1).isEmpty()) lines.remove(lines.size() - 1);
