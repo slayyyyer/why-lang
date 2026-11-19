@@ -1,5 +1,7 @@
 # Why
 
+[![CI](https://github.com/slayyyyer/why-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/slayyyyer/why-lang/actions/workflows/ci.yml)
+
 A small, Ruby-flavored, old-school-PHP-style page language for the JVM. Drop a `.why` file in a
 folder, hit its URL, it runs. No router, no build step, no framework boilerplate.
 
