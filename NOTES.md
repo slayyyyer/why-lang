@@ -21,6 +21,11 @@ The specification I was given ends in the middle of the `imports:` rules, so the
 
 ## Deliberately left out (candidates for later)
 
+### Page format
+
+- An optional `model:` section for shared queries. A possibility, not a promise; today data access is
+  `db.query`/`db.get`/`db.exec` plus imported `def`s.
+
 ### Language
 
 - Modifier `if`/`unless` (`x = 1 if ok`), `case/when`, ranges, symbols, string formatting.
@@ -40,12 +45,12 @@ The specification I was given ends in the middle of the `imports:` rules, so the
 
 ### Server and runtime
 
-- Hot reload / compile cache: every request re-reads and recompiles the page. Fast enough for a
-  PoC, and it makes "edit and refresh" trivially correct.
+- Hot reload / parse cache: every request re-reads and reparses the page; there is no cache. Fast
+  enough for a PoC, and it makes "edit and refresh" trivially correct.
 - Urlencoded POST bodies are parsed into `form`, `redirect(path)` answers 303, and a one-shot
-  `flash` global carries messages across a redirect using an in-memory `why_session` cookie.
-  Multipart bodies, uploads, general cookies, longer-lived sessions, custom headers and other
-  statuses are still out. The awkward parts are recorded in [FRICTION.md](FRICTION.md).
+  `flash` global carries messages across a redirect using an in-memory `why_session` cookie. The
+  cookie is `HttpOnly` and `SameSite=Lax`. Multipart bodies, uploads, general cookies,
+  longer-lived sessions, custom headers and other statuses are still out. The awkward parts are recorded in [FRICTION.md](FRICTION.md).
 - Custom 404 pages, directory listings, configurable index files.
 - A JSON helper (`render json:`). The spec allows Jackson or Gson, but nothing needed JSON yet,
   so the dependency was left out.
@@ -59,3 +64,23 @@ The specification I was given ends in the middle of the `imports:` rules, so the
   first-run `schema.sql`.
 - H2 support. The `db` global is hard-wired to SQLite for now, although the driver is the only
   thing that would need to change.
+
+## Open questions
+
+- **Language drift.** The shipped direction is the Ruby-shaped language: `do |x| ... end` blocks,
+  `unless`, `elsif`, `while`/`break`, and `&&`/`||` are implemented, tested and documented. The
+  earlier simplification (`{ }` blocks with implicit `it`, no `unless`/`elsif`/`while`) was not
+  carried through. Why this direction: the parser, interpreter, tests and examples already follow
+  the Ruby forms, so changing them would be a language change; no explicit design rationale for
+  rejecting the simplification is recorded. This needs a deliberate decision.
+- **Custom block helpers.** Not supported today. Template blocks are limited to `if`, `unless` and
+  `each`; an unknown `{{#name}}` is an error. A user `def` can receive a language block
+  (`do |x| ... end`), but template blocks and language blocks are separate concepts. Whether to
+  unify them is open.
+- **Block-call syntax.** No syntax exists today for calling a block from a user-defined function;
+  user functions receive ordinary arguments, and a `do` block can only be attached to a call.
+  If custom helpers are added, choose explicit `block.call` or Ruby-style `yield`; the current
+  parser and interpreter have neither a block-call expression nor a `yield` keyword.
+- **Parse cache wording.** The documentation brief asked for "parses it on request and caches the
+  result", but the server currently re-reads and reparses every request; `PageCompiler` has no
+  cache. Adding one is runtime behavior and was not done, so the docs say "parses it on request".
