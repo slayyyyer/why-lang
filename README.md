@@ -391,6 +391,23 @@ n     = db.exec("insert into posts (title) values (?)", title)
 Rows are hashes keyed by column label, so `{{it.title}}` and `post.title` work. Arguments are
 bound as prepared-statement parameters.
 
+A parameter can be named, which is useful when one value appears more than once:
+
+```ruby
+db.query("select * from posts where user_id = :who or id in (select post_id from likes where user_id = :who)",
+         who: uid)
+db.query("select * from posts where id = ? and user_id = :who", id, who: uid)  # mixed with ?
+```
+
+Names are checked against the SQL: a missing value and an unused name both raise. Use `#{}` only
+to build SQL structure, never to insert values. An identifier cannot be a parameter, so a page
+that must choose a table or column passes it through an explicit allowlist:
+
+```ruby
+table = sql.ident(params.table, ["likes", "reposts"])
+db.exec("delete from " + table + " where user_id = ?", uid)
+```
+
 If the database file does not exist, `<site>/schema.sql` is applied once so a site folder is
 self-contained. A `migrations/` folder takes over the schema: every `.sql` file in it applies once,
 in filename order, each in its own transaction, recorded in a `schema_migrations` table. A fresh

@@ -210,6 +210,17 @@ class LangTest {
     }
 
     @Test
+    void namedArgumentsBecomeATrailingHash() {
+        Scope scope = run("""
+                def pick(h)
+                  h.who
+                end
+                value = pick(who: 7)
+                """);
+        assertEquals(7L, scope.get("value"));
+    }
+
+    @Test
     void parseErrorsCarryTheFileAndLine() {
         WhyError error = assertThrows(WhyError.class, () -> run("x = 1\n\nif\nend\n"));
         assertEquals("test.why", error.file());

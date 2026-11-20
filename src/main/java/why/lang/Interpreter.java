@@ -341,16 +341,33 @@ public final class Interpreter {
             };
         }
 
+        if (receiver instanceof Sql) {
+            return switch (name) {
+                case "ident" -> new Sql().ident(first, args.size() > 1 ? args.get(1) : null, line);
+                default -> throw new WhyError("'sql' has no method '" + name + "' (try ident)", null, line);
+            };
+        }
+
         if (receiver instanceof Db db) {
             if (!(first instanceof String sql)) {
                 throw new WhyError("db." + name + " needs a SQL string", null, line);
             }
             List<Object> params = args.isEmpty() ? List.of() : args.subList(1, args.size());
+            Map<String, Object> named = Map.of();
+            // A trailing hash is the parser's named-argument form: db.query(sql, who: uid).
+            if (!params.isEmpty() && params.get(params.size() - 1) instanceof Map<?, ?> map) {
+                Map<String, Object> converted = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    converted.put(Value.str(entry.getKey()), entry.getValue());
+                }
+                named = converted;
+                params = params.subList(0, params.size() - 1);
+            }
             try {
                 return switch (name) {
-                    case "query" -> db.query(sql, params);
-                    case "exec" -> db.exec(sql, params);
-                    case "get" -> db.get(sql, params);
+                    case "query" -> db.query(sql, params, named);
+                    case "exec" -> db.exec(sql, params, named);
+                    case "get" -> db.get(sql, params, named);
                     default -> throw new WhyError("'db' has no method '" + name + "' (try query, exec or get)", null, line);
                 };
             } catch (WhyError e) {

@@ -131,7 +131,7 @@ end</code></pre></div>
           <li>Only <code>nil</code> and <code>false</code> are falsy. <code>0</code> and <code>""</code> are truthy, so empty states use <code>count &gt; 0</code>, not <code>if count</code>.</li>
           <li>Undefined names read as <code>nil</code> instead of raising.</li>
           <li>Missing arguments become <code>nil</code>; extra arguments are ignored.</li>
-          <li>There are no classes, modules, exceptions, keyword arguments or first-class functions.</li>
+          <li>There are no classes, modules, exceptions or first-class functions. A trailing <code>name: value</code> in a call is a hash, which is how <code>db.query</code> takes named parameters.</li>
         </ul>
 
         <h3>Built-in methods</h3>
@@ -199,10 +199,16 @@ session.rotate()                  # new ID after sign-in</code></pre></div>
         <p><code>pbkdf2(password, salt, iterations)</code> derives a 32-byte PBKDF2-HMAC-SHA256 key and returns lowercase hex. The iteration count must be 10,000 to 1,000,000. Store the parameters with the key, as <code>pbkdf2-sha256$120000$&lt;salt&gt;$&lt;key&gt;</code>, so the cost can be raised later. Compare with <code>pbkdf2(password, salt, rounds) == stored_key</code>, use a fresh random salt per account, and never store the password itself.</p>
 
         <h2 id="database">The database</h2>
-        <p>Every page request gets a SQLite connection through the <code>db</code> global. Arguments are bound as prepared-statement parameters.</p>
+        <p>Every page request gets a SQLite connection through the <code>db</code> global. Arguments are bound as prepared-statement parameters; a trailing <code>name: value</code> binds <code>:name</code> wherever it appears in the SQL.</p>
         <div class="code"><div class="code-title">queries and writes</div><pre><code>posts = db.query("select * from posts order by id desc")
 post  = db.get("select * from posts where id = ?", id)
 n     = db.exec("insert into posts (title) values (?)", title)</code></pre></div>
+        <p>A named parameter may repeat, and can be mixed with positional <code>?</code> parameters:</p>
+        <div class="code"><div class="code-title">named parameters</div><pre><code>db.query("select * from posts where user_id = :who or id in (select post_id from likes where user_id = :who)", who: uid)
+db.query("select * from posts where id = ? and user_id = :who", id, who: uid)</code></pre></div>
+        <p>Names are checked: a missing value and an unused name both raise. Use <code>#{}</code> only for SQL structure, never for values. Identifiers cannot be parameters, so a dynamic table or column goes through an explicit allowlist:</p>
+        <div class="code"><div class="code-title">checked identifiers</div><pre><code>table = sql.ident(params.table, ["likes", "reposts"])
+db.exec("delete from " + table + " where user_id = ?", uid)</code></pre></div>
         <p>Rows are hashes keyed by column label, so <code>{{it.title}}</code> and <code>post.title</code> work. A query is capped at 10,000 rows and 4 MiB of column labels and values; a larger result raises a page error instead of loading without bound. If <code>data.db</code> does not exist and <code>schema.sql</code> exists, the script runs once.</p>
         <p>A <code>migrations/</code> folder takes over the schema: every <code>.sql</code> file in it applies once, in filename order, each in its own transaction, recorded in a <code>schema_migrations</code> table. A fresh database runs them in order; an existing one applies only what is pending, so schema changes upgrade in place.</p>
 

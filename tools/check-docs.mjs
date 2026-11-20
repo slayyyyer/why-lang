@@ -50,13 +50,14 @@ requireIn("README.md", [
     "validate(",
     "session.set",
     "pbkdf2(",
+    "sql.ident(",
 ]);
 requireIn("docs/install.html", [
     "io.github.slayyyyer.why",
     "mavenCentral()",
     "why new",
 ]);
-requireIn("docs/usage.html", ["csrf.token", "response.json", "validate(", "session.set", "pbkdf2("]);
+requireIn("docs/usage.html", ["csrf.token", "response.json", "validate(", "session.set", "pbkdf2(", "sql.ident("]);
 
 if (failures.length > 0) {
     console.error("docs are out of sync:");
