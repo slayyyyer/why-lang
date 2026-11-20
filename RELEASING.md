@@ -47,7 +47,7 @@ release; the deployment status endpoint can lag or answer `500` while it settles
 artifacts themselves:
 
 ```bash
-curl -fI https://repo1.maven.org/maven2/io/github/slayyyyer/why-lang/0.1.0/why-lang-0.1.0.pom
+curl -fI https://repo1.maven.org/maven2/io/github/slayyyyer/why-lang/0.2.0/why-lang-0.2.0.pom
 ```
 
 ## Publishing the plugin to the Gradle Plugin Portal

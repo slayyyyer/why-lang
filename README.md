@@ -29,7 +29,7 @@ pluginManagement {
 ```kotlin
 // build.gradle.kts
 plugins {
-    id("io.github.slayyyyer.why") version "0.1.0"
+    id("io.github.slayyyyer.why") version "0.2.0"
 }
 
 repositories {
@@ -77,7 +77,7 @@ src/why/index.why
 src/why/style.css
 ```
 
-The plugin applies `java-library`, adds the Why runtime (`io.github.slayyyyer:why-lang:0.1.0`) as an `api`
+The plugin applies `java-library`, adds the Why runtime (`io.github.slayyyyer:why-lang:0.2.0`) as an `api`
 dependency, copies `src/why` into the jar at `META-INF/why-site`, and writes a sorted
 `META-INF/why-site.index`. It adds:
 
