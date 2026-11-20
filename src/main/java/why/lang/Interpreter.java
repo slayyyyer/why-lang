@@ -17,13 +17,15 @@ import why.util.Suggest;
 public final class Interpreter {
 
     /** Free functions that exist without a {@code def}; kept here so tools can share the list. */
-    public static final List<String> BUILTINS = List.of("str", "int", "float", "redirect", "validate", "pbkdf2");
+    public static final List<String> BUILTINS = List.of("str", "int", "float", "redirect", "redirect_back",
+            "status", "halt", "validate", "pbkdf2");
 
     private static final Object NEXT = new Object();
     private static final Object BREAK = new Object();
     private static final int MAX_CALL_DEPTH = 256;
 
     private final Map<String, Function> functions = new HashMap<>();
+    private final Scope globals;
     private final ExecutionBudget budget;
     private int callDepth;
 
@@ -32,6 +34,7 @@ public final class Interpreter {
     }
 
     public Interpreter(Map<String, Ast.Def> defs, Scope globals, ExecutionBudget budget) {
+        this.globals = globals;
         this.budget = budget;
         for (Map.Entry<String, Ast.Def> entry : defs.entrySet()) {
             Ast.Def def = entry.getValue();
@@ -209,6 +212,15 @@ public final class Interpreter {
             case "int" -> Value.toLong(arg);
             case "float" -> Value.toDouble(arg);
             case "redirect" -> throw new Redirect(redirectTarget(arg, line));
+            case "redirect_back" -> throw new Redirect(redirectBack(args, line));
+            case "status" -> {
+                pageResponse("status", line).status(arg, line);
+                yield null;
+            }
+            case "halt" -> {
+                pageResponse("halt", line).status(arg, line);
+                throw new Halt();
+            }
             case "validate" -> validate(args, line);
             case "pbkdf2" -> pbkdf2(args, line);
             default -> throw new WhyError(
@@ -271,9 +283,29 @@ public final class Interpreter {
     private static String redirectTarget(Object arg, int line) {
         String target = Value.str(arg);
         if (!Redirect.isSameOriginPath(target)) {
-            throw new WhyError("redirect needs a same-origin path starting with '/'", null, line);
+            throw new WhyError("redirect needs a single-slash local path starting with '/'", null, line);
         }
         return target;
+    }
+
+    /** Uses the posted {@code back} field when it is a local path, otherwise the fallback. */
+    private String redirectBack(List<Object> args, int line) {
+        Object form = globals.get("form");
+        Object back = form instanceof Map<?, ?> map ? map.get("back") : null;
+        if (back != null && Redirect.isSameOriginPath(Value.str(back))) {
+            return Value.str(back);
+        }
+        if (args.isEmpty() || args.get(0) == null) {
+            throw new WhyError("redirect_back needs a fallback path", null, line);
+        }
+        return redirectTarget(args.get(0), line);
+    }
+
+    private Response pageResponse(String builtin, int line) {
+        if (!(globals.get("response") instanceof Response response)) {
+            throw new WhyError(builtin + " needs a page response", null, line);
+        }
+        return response;
     }
 
     private Object method(Object receiver, String name, List<Object> args, Function block, int line) {

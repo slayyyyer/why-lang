@@ -348,8 +348,8 @@ Built-in methods:
   `each`/`map`/`select` with a block
 - Hashes: `keys`, `values`, `length`/`size`, `has_key?`, `each` with a block
 - Numbers: `to_i`, `to_f`, `abs`, `round`
-- Functions: `str(x)`, `int(x)`, `float(x)`, `redirect(path)`, `validate(form, rules)`,
-  `pbkdf2(password, salt, iterations)`
+- Functions: `str(x)`, `int(x)`, `float(x)`, `redirect(path)`, `redirect_back(fallback)`,
+  `status(code)`, `halt(code)`, `validate(form, rules)`, `pbkdf2(password, salt, iterations)`
 
 ## Views
 
@@ -464,14 +464,23 @@ account and never store the password itself.
 
 ## Responses
 
-`redirect("/path")` answers `303 See Other`. A page controls the rest through `response`:
+`redirect("/path")` answers `303 See Other`; it accepts only a single-slash local path, never an
+absolute URL, `//host` or a backslash variant. `redirect_back("/")` uses the posted `back` field
+when it is such a path and the fallback otherwise.
+
+A page controls the rest through `response`, or the `status`/`halt` builtins:
 
 ```ruby
 response.status(201)                      # 200-599; defaults to 200
+status(201)                               # the same, as a builtin
+halt(404)                                 # set the status and stop before the view renders
 response.header("X-Why", "created")
 response.json({ok: true, count: 2})       # answers JSON and ignores the rendered view
 response.csp("default-src 'self'")        # opt into a policy
 ```
+
+`status(code)` sets the status and keeps rendering, which is what a page that wants a 404 body
+uses; `halt(code)` sets it and stops the controller or view immediately.
 
 `response.header` refuses the headers the server owns (`Content-Length`, `Set-Cookie` and friends)
 and any value that is not one line of printable ASCII. The default `frame-ancestors 'none'` is

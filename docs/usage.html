@@ -143,7 +143,7 @@ end</code></pre></div>
               <tr><td>Lists</td><td><code>length</code>, <code>size</code>, <code>first</code>, <code>last</code>, <code>push</code>, <code>append</code>, <code>join</code>, <code>include?</code>, <code>reverse</code>, <code>sum</code>, <code>each</code>, <code>map</code>, <code>select</code> (the last three with a block)</td></tr>
               <tr><td>Hashes</td><td><code>keys</code>, <code>values</code>, <code>length</code>, <code>size</code>, <code>has_key?</code>, <code>each</code> (with a block)</td></tr>
               <tr><td>Numbers</td><td><code>to_i</code>, <code>to_f</code>, <code>abs</code>, <code>round</code></td></tr>
-              <tr><td>Functions</td><td><code>str(x)</code>, <code>int(x)</code>, <code>float(x)</code>, <code>redirect(path)</code>, <code>pbkdf2(password, salt, iterations)</code></td></tr>
+              <tr><td>Functions</td><td><code>str(x)</code>, <code>int(x)</code>, <code>float(x)</code>, <code>redirect(path)</code>, <code>redirect_back(fallback)</code>, <code>status(code)</code>, <code>halt(code)</code>, <code>pbkdf2(password, salt, iterations)</code></td></tr>
             </tbody>
           </table>
         </div>
@@ -213,7 +213,8 @@ db.exec("delete from " + table + " where user_id = ?", uid)</code></pre></div>
         <p>A <code>migrations/</code> folder takes over the schema: every <code>.sql</code> file in it applies once, in filename order, each in its own transaction, recorded in a <code>schema_migrations</code> table. A fresh database runs them in order; an existing one applies only what is pending, so schema changes upgrade in place.</p>
 
         <h2 id="responses">Responses and flash</h2>
-        <p><code>redirect("/path")</code> stops the page and answers <code>303 See Other</code>. The target must be a path-absolute same-origin path; absolute URLs and protocol-relative locations are rejected.</p>
+        <p><code>redirect("/path")</code> stops the page and answers <code>303 See Other</code>. The target must be a single-slash local path; absolute URLs, protocol-relative locations, backslash variants and whitespace are rejected. <code>redirect_back("/")</code> uses the posted <code>back</code> field when it is such a path and the fallback otherwise.</p>
+        <p><code>status(404)</code> sets the response status and keeps rendering, which is how a page answers a missing record with a 404 body. <code>halt(404)</code> sets the status and stops the page before the view renders. Both are also available as <code>response.status(...)</code>.</p>
         <p>Every response carries <code>X-Content-Type-Options: nosniff</code>, <code>Referrer-Policy: no-referrer</code>, <code>Content-Security-Policy: frame-ancestors 'none'</code> and <code>X-Frame-Options: DENY</code>. A page opts into a fuller policy in its controller:</p>
         <div class="code"><div class="code-title">controller</div><pre><code>response.csp("default-src 'self'; img-src 'self' data:")</code></pre></div>
         <p>The default <code>frame-ancestors 'none'</code> is appended unless the policy sets its own <code>frame-ancestors</code>. The value must be printable ASCII on one line.</p>
