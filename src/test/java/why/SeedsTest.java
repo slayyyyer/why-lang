@@ -2,6 +2,7 @@ package why;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -45,9 +46,9 @@ class SeedsTest {
         site();
         Path dbFile = dir.resolve("data.db");
 
-        assertEquals(1, Seeds.apply(dir, dbFile, true, true));
+        assertTrue(Seeds.apply(dir, dbFile, true, true));
         assertEquals("alice", name(dbFile));
-        assertEquals(0, Seeds.apply(dir, dbFile, false, true), "a persistent database is not reseeded");
+        assertFalse(Seeds.apply(dir, dbFile, false, true), "a persistent database is not reseeded");
         assertEquals("alice", name(dbFile));
     }
 
@@ -56,14 +57,14 @@ class SeedsTest {
         site();
         Path dbFile = dir.resolve("data.db");
 
-        assertEquals(0, Seeds.apply(dir, dbFile, true, false), "--dev is the opt-in");
+        assertFalse(Seeds.apply(dir, dbFile, true, false), "--dev is the opt-in");
         assertFalse(hasTable(dbFile));
-        assertEquals(0, Seeds.apply(dir, dbFile, false, false));
+        assertFalse(Seeds.apply(dir, dbFile, false, false));
         assertFalse(hasTable(dbFile));
     }
 
     @Test
     void aMissingSeedIsNotAnError() throws Exception {
-        assertEquals(0, Seeds.apply(dir, dir.resolve("data.db"), true, true));
+        assertFalse(Seeds.apply(dir, dir.resolve("data.db"), true, true));
     }
 }

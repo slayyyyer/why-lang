@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import why.lang.Db;
+import why.lang.Passwords;
 import why.lang.Session;
 import why.testing.TestServer;
 
@@ -118,6 +119,34 @@ class WhyxAppTest {
     }
 
     @Test
+    void deletingAThreadRemovesItsNestedReplies() throws Exception {
+        String alice = signIn("alice");
+
+        TestServer.Response deleted = post("/act", alice,
+                Map.of("action", "delete", "post_id", "1", "back", "/"));
+
+        assertEquals(303, deleted.status(), deleted.body());
+        assertNull(row("select id from posts where id in (1, 13, 14, 15)", List.of()),
+                "a nested reply survived the deleted thread");
+        assertNotNull(row("select id from posts where id = 16", List.of()),
+                "a reply to another thread was deleted");
+    }
+
+    @Test
+    void deletingAPostFromItsThreadRedirectsHome() throws Exception {
+        String alice = signIn("alice");
+
+        TestServer.Response deleted = post("/act", alice,
+                Map.of("action", "delete", "post_id", "1", "back", "/post?id=1"));
+
+        assertEquals(303, deleted.status(), deleted.body());
+        assertEquals("/", deleted.header("location"),
+                "the deleted thread would 404, so the redirect must go home");
+        assertNull(row("select id from posts where id = 1", List.of()),
+                "alice's post should be gone");
+    }
+
+    @Test
     void theHomeFeedLeavesOutPeopleTheViewerDoesNotFollow() throws Exception {
         String alice = signIn("alice");
         String home = get("/", alice).body();
@@ -130,6 +159,70 @@ class WhyxAppTest {
                 "frank is not followed, so his post does not belong on alice's home");
         assertFalse(home.contains("papers are just blog posts with better typography"),
                 "dave is not followed, so his post does not belong on alice's home");
+    }
+
+    @Test
+    void aSuccessfulSignInUpgradesAnOldPasswordHash() throws Exception {
+        String old = "pbkdf2-sha256$10000$testingsalt$"
+                + Passwords.pbkdf2(PASSWORD, "testingsalt", 10000);
+        try (Db db = new Db(dir.resolve("data.db"))) {
+            db.exec("update users set password_hash = ? where handle = 'alice'", List.of(old));
+        }
+
+        TestServer.Response wrong = post("/login", null,
+                Map.of("handle", "alice", "password", "not-it"));
+        assertEquals(200, wrong.status(), wrong.body());
+        assertEquals(old, storedPassword("alice"), "a failed sign-in must not rewrite the row");
+
+        TestServer.Response right = post("/login", null,
+                Map.of("handle", "alice", "password", PASSWORD));
+        assertEquals(303, right.status(), right.body());
+        String upgraded = storedPassword("alice");
+        assertNotEquals(old, upgraded);
+        assertTrue(upgraded.startsWith("pbkdf2-sha256$120000$"), upgraded);
+        assertTrue(Passwords.verify(PASSWORD, upgraded), upgraded);
+    }
+
+    private String storedPassword(String handle) {
+        return (String) ((Map<?, ?>) row("select password_hash from users where handle = ?",
+                List.of(handle))).get("password_hash");
+    }
+
+    @Test
+    void aHandleThatCleansToNothingIsRejectedBeforeItIsStored() throws Exception {
+        long before = count("select count(*) as n from users", List.of());
+
+        TestServer.Response blank = post("/signup", null,
+                Map.of("name", "Ann", "handle", "@@@", "password", "secret1"));
+        assertEquals(200, blank.status(), blank.body());
+        assertTrue(blank.body().contains("must be at least 3"), blank.body());
+
+        TestServer.Response shortHandle = post("/signup", null,
+                Map.of("name", "Ann", "handle", "@a", "password", "secret1"));
+        assertEquals(200, shortHandle.status(), shortHandle.body());
+        assertTrue(shortHandle.body().contains("at least 3"), shortHandle.body());
+
+        assertEquals(before, count("select count(*) as n from users", List.of()),
+                "a rejected sign-up created a user");
+        assertNull(row("select id from users where handle = '' or handle = 'a'", List.of()));
+    }
+
+    @Test
+    void signupsFromOneAddressAreLimited() throws Exception {
+        for (int i = 1; i <= 5; i++) {
+            TestServer.Response created = post("/signup", null,
+                    Map.of("name", "New " + i, "handle", "newbie" + i, "password", "secret1"));
+            assertEquals(303, created.status(), created.body());
+        }
+        long before = count("select count(*) as n from users", List.of());
+
+        TestServer.Response blocked = post("/signup", null,
+                Map.of("name", "New 6", "handle", "newbie6", "password", "secret1"));
+        assertEquals(200, blocked.status(), blocked.body());
+        assertTrue(blocked.body().contains("Too many accounts"), blocked.body());
+        assertEquals(before, count("select count(*) as n from users", List.of()),
+                "a rate-limited sign-up created a user");
+        assertNull(row("select id from users where handle = 'newbie6'", List.of()));
     }
 
     /** Copies the pages, stylesheet, migrations and dev seed, leaving the demo database behind. */

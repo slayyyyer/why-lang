@@ -26,6 +26,13 @@ class CookieSecurityTest {
                 view:
                 {{csrf.token}}
                 """, StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("session.why"), """
+                controller:
+                session.set("seen", "1")
+
+                view:
+                ok
+                """, StandardCharsets.UTF_8);
     }
 
     @Test
@@ -38,6 +45,11 @@ class CookieSecurityTest {
             String plain = cookie(trusted.send("GET", "/token", null, null,
                     Map.of("Cookie", "", "X-Forwarded-Proto", "http")));
             assertFalse(plain.contains("Secure"), plain);
+
+            String session = cookie(trusted.send("GET", "/session", null, null,
+                    Map.of("Cookie", "", "X-Forwarded-Proto", "https")));
+            assertTrue(session.contains("why_sid="), session);
+            assertTrue(session.contains("Secure"), session);
         }
 
         try (TestServer untrusted = TestServer.start(new Site(dir), false, false, false)) {

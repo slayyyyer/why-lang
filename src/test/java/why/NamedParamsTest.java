@@ -75,6 +75,15 @@ class NamedParamsTest {
     }
 
     @Test
+    void numberedQuestionMarkParametersAreRejected() throws Exception {
+        try (Db db = new Db(dir.resolve("numbered.db"))) {
+            WhyError error = assertThrows(WhyError.class,
+                    () -> db.query("select ?1", List.of(7), Map.of()));
+            assertTrue(error.getMessage().contains("numbered"), error.getMessage());
+        }
+    }
+
+    @Test
     void pageSyntaxBindsANamedArgument() throws Exception {
         try (Db db = new Db(dir.resolve("page.db"))) {
             db.exec("create table posts (n integer)", List.of());
@@ -90,6 +99,13 @@ class NamedParamsTest {
 
             assertEquals(7L, scope.get("value"));
         }
+    }
+
+    @Test
+    void positionalAfterNamedIsRejected() {
+        WhyError error = assertThrows(WhyError.class, () -> new Parser(
+                "def pick(a)\n  a\nend\npick(who: 1, 2)\n", "test.why", 1).parseProgram());
+        assertTrue(error.getMessage().contains("positional"), error.getMessage());
     }
 
     @Test

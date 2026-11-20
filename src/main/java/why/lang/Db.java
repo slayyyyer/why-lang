@@ -10,9 +10,11 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.sqlite.ProgressHandler;
 
@@ -96,7 +98,7 @@ public final class Db implements AutoCloseable {
             Map<String, Object> values = named == null ? Map.of() : named;
             StringBuilder out = new StringBuilder(sql.length());
             List<Object> bound = new ArrayList<>();
-            java.util.Set<String> used = new java.util.HashSet<>();
+            Set<String> used = new HashSet<>();
             int next = 0;
             int i = 0;
             while (i < sql.length()) {
@@ -121,6 +123,9 @@ public final class Db implements AutoCloseable {
                     out.append(sql, i, end);
                     i = end;
                 } else if (c == '?') {
+                    if (i + 1 < sql.length() && Character.isDigit(sql.charAt(i + 1))) {
+                        throw new WhyError("numbered '?' parameters are not supported; use '?' or ':name'");
+                    }
                     if (next >= positional.size()) {
                         throw new WhyError("db needs a value for every '?'");
                     }
@@ -179,11 +184,11 @@ public final class Db implements AutoCloseable {
         }
     }
 
-    /** Runs a {@code schema.sql} file, one {@code ;}-separated statement at a time. */
+    /** Runs a {@code schema.sql} file, one top-level statement at a time. */
     public static void applyScript(Path dbFile, String script) {
         try (Db db = new Db(dbFile)) {
-            for (String statement : script.split(";")) {
-                if (!statement.isBlank()) db.exec(statement, List.of());
+            for (String statement : SqlScript.statements(script)) {
+                db.exec(statement, List.of());
             }
         }
     }
@@ -213,6 +218,9 @@ public final class Db implements AutoCloseable {
             try (Statement statement = conn.createStatement()) {
                 statement.execute("pragma journal_mode = WAL");
                 statement.execute("pragma busy_timeout = " + BUSY_TIMEOUT_MILLIS);
+                // SQLite defaults foreign keys off. Every page connection enforces the schema's
+                // declared references, including on delete cascades.
+                statement.execute("pragma foreign_keys = on");
             }
             ProgressHandler.setHandler(conn, PROGRESS_VM_CALLS, ABORT_ON_INTERRUPT);
             return conn;

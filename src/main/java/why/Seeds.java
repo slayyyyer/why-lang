@@ -19,13 +19,13 @@ public final class Seeds {
 
     private Seeds() {}
 
-    /** Applies the seed and returns 1 when it ran, 0 when it was absent or not a fresh dev run. */
-    public static int apply(Path siteRoot, Path dbFile, boolean fresh, boolean dev) throws IOException {
-        if (!dev || !fresh) return 0;
+    /** Applies the seed, returning whether it ran; absent or non-dev/fresh runs do nothing. */
+    public static boolean apply(Path siteRoot, Path dbFile, boolean fresh, boolean dev) throws IOException {
+        if (!dev || !fresh) return false;
         Path seed = siteRoot.resolve(FILE);
-        if (!Files.isRegularFile(seed)) return 0;
+        if (!Files.isRegularFile(seed)) return false;
         String script = Files.readString(seed, StandardCharsets.UTF_8);
         Db.applyScript(dbFile, script);
-        return 1;
+        return true;
     }
 }

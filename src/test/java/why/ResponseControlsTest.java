@@ -55,6 +55,10 @@ class ResponseControlsTest {
                 view:
                 never
                 """);
+        write("view-halt.why", """
+                view:
+                before{{halt(404)}}after
+                """);
         write("bad.why", """
                 controller:
                 redirect("//evil.example")
@@ -86,6 +90,13 @@ class ResponseControlsTest {
         TestServer.Response response = server.get("/halt");
         assertEquals(404, response.status());
         assertFalse(response.body().contains("never"), response.body());
+    }
+
+    @Test
+    void haltInAViewStopsItToo() throws Exception {
+        TestServer.Response response = server.get("/view-halt");
+        assertEquals(404, response.status());
+        assertFalse(response.body().contains("after"), response.body());
     }
 
     @Test

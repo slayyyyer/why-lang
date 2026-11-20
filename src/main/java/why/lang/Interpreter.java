@@ -18,7 +18,8 @@ public final class Interpreter {
 
     /** Free functions that exist without a {@code def}; kept here so tools can share the list. */
     public static final List<String> BUILTINS = List.of("str", "int", "float", "redirect", "redirect_back",
-            "status", "halt", "validate", "pbkdf2");
+            "status", "halt", "validate", "pbkdf2", "password_hash", "password_matches",
+            "password_needs_rehash");
 
     private static final Object NEXT = new Object();
     private static final Object BREAK = new Object();
@@ -223,6 +224,9 @@ public final class Interpreter {
             }
             case "validate" -> validate(args, line);
             case "pbkdf2" -> pbkdf2(args, line);
+            case "password_hash" -> passwordHash(args, line);
+            case "password_matches" -> passwordMatches(args, line);
+            case "password_needs_rehash" -> passwordNeedsRehash(args, line);
             default -> throw new WhyError(
                     "undefined function '" + name + "'" + suggestFunction(name), null, line);
         };
@@ -270,6 +274,31 @@ public final class Interpreter {
             throw new WhyError("pbkdf2 needs a password, a salt and an iteration count", null, line);
         }
         return Passwords.pbkdf2(Value.str(args.get(0)), Value.str(args.get(1)), Value.toLong(args.get(2)));
+    }
+
+    /** {@code password_hash(password, iterations)} salts and encodes a row to store. */
+    private static String passwordHash(List<Object> args, int line) {
+        if (args.size() < 2) {
+            throw new WhyError("password_hash needs a password and an iteration count", null, line);
+        }
+        return Passwords.hash(Value.str(args.get(0)), Value.toLong(args.get(1)));
+    }
+
+    /** {@code password_matches(password, stored)} verifies a stored row in constant time. */
+    private static boolean passwordMatches(List<Object> args, int line) {
+        if (args.size() < 2) {
+            throw new WhyError("password_matches needs a password and a stored hash", null, line);
+        }
+        return Passwords.verify(Value.str(args.get(0)), Value.str(args.get(1)));
+    }
+
+    /** {@code password_needs_rehash(stored, iterations)} reports an old or unreadable row. */
+    private static boolean passwordNeedsRehash(List<Object> args, int line) {
+        if (args.size() < 2) {
+            throw new WhyError(
+                    "password_needs_rehash needs a stored hash and an iteration count", null, line);
+        }
+        return Passwords.needsRehash(Value.str(args.get(0)), Value.toLong(args.get(1)));
     }
 
     private static int ruleNumber(String rule, int line) {
@@ -373,9 +402,9 @@ public final class Interpreter {
             };
         }
 
-        if (receiver instanceof Sql) {
+        if (receiver instanceof Sql sql) {
             return switch (name) {
-                case "ident" -> new Sql().ident(first, args.size() > 1 ? args.get(1) : null, line);
+                case "ident" -> sql.ident(first, args.size() > 1 ? args.get(1) : null, line);
                 default -> throw new WhyError("'sql' has no method '" + name + "' (try ident)", null, line);
             };
         }

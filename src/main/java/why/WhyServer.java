@@ -8,8 +8,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -496,11 +496,52 @@ public final class WhyServer {
         return globals;
     }
 
-    /** The caller's IP address as text, for pages that throttle or audit by client. */
-    private static String remoteAddress(HttpExchange exchange) {
+    /** The caller's IP, honouring --trust-proxy, for pages that throttle or audit by client. */
+    private String remoteAddress(HttpExchange exchange) {
         InetSocketAddress remote = exchange.getRemoteAddress();
-        InetAddress address = remote == null ? null : remote.getAddress();
-        return address == null ? "" : address.getHostAddress();
+        InetAddress peer = remote == null ? null : remote.getAddress();
+        return clientAddress(peer, exchange.getRequestHeaders().get("X-Forwarded-For"), trustProxy);
+    }
+
+    /**
+     * The address a page should see. Without {@code --trust-proxy}, or from a peer that is not the
+     * loopback proxy, it is the socket peer. When trusted, the chain is read from the right: the
+     * proxy appends the address it saw, so the last hop that is not itself a loopback proxy is the
+     * closest trusted answer, and a prefix the client supplied cannot spoof a per-IP limit.
+     */
+    static String clientAddress(InetAddress peer, List<String> forwardedFor, boolean trustProxy) {
+        String direct = peer == null ? "" : peer.getHostAddress();
+        if (!trustProxy || peer == null || !peer.isLoopbackAddress() || forwardedFor == null) {
+            return direct;
+        }
+        for (int header = forwardedFor.size() - 1; header >= 0; header--) {
+            String value = forwardedFor.get(header);
+            if (value == null) continue;
+            String[] hops = value.split(",");
+            for (int hop = hops.length - 1; hop >= 0; hop--) {
+                InetAddress address = literal(hops[hop].strip());
+                if (address == null || address.isLoopbackAddress()) continue;
+                return address.getHostAddress();
+            }
+        }
+        return direct;
+    }
+
+    /** An IP literal, or null; names are rejected so a forwarded header cannot cause a lookup. */
+    private static InetAddress literal(String value) {
+        String text = value;
+        if (text.startsWith("[") && text.endsWith("]")) {
+            text = text.substring(1, text.length() - 1);
+        }
+        if (text.isEmpty() || text.length() > 64) return null;
+        boolean ipv4 = text.matches("\\d{1,3}(\\.\\d{1,3}){3}");
+        boolean ipv6 = text.indexOf(':') >= 0 && text.matches("[0-9A-Fa-f:.]+");
+        if (!ipv4 && !ipv6) return null;
+        try {
+            return InetAddress.getByName(text);
+        } catch (UnknownHostException e) {
+            return null;
+        }
     }
 
     /** POSTed urlencoded fields; empty on GET or other content types. */
@@ -582,7 +623,7 @@ public final class WhyServer {
 
     private void sendRedirect(HttpExchange exchange, String location) throws IOException {
         if (!Redirect.isSameOriginPath(location)) {
-            throw new WhyError("redirect must be a same-origin path", null, 0);
+            throw new WhyError("redirect needs a single-slash local path starting with '/'", null, 0);
         }
         exchange.getResponseHeaders().set("Location", location);
         exchange.getResponseHeaders().set("Cache-Control", "no-store");

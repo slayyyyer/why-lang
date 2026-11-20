@@ -140,8 +140,9 @@ java -jar build/libs/why.jar ./site
 accepts `--port`, `--host`, `--db`, `--dev`, `--secure-cookies` and `--trust-proxy`; the plugin
 exposes the same settings through the `why` extension. `PORT`, `HOST`, `WHY_DB` and
 `WHY_SECURE_COOKIES` supply the defaults for the first four, so a container needs no shell wrapper.
-`--trust-proxy` marks cookies `Secure` when a loopback proxy forwards `X-Forwarded-Proto: https`;
-the header is ignored from any other peer.
+`--trust-proxy` marks cookies `Secure` when a loopback proxy forwards `X-Forwarded-Proto: https`,
+and derives `request.remote` from the last `X-Forwarded-For` hop that is not loopback; both headers
+are ignored from any other peer.
 
 To try a local build of the plugin against a consumer project, run
 `./gradlew publishToMavenLocal :why-gradle-plugin:publishToMavenLocal` and put `mavenLocal()` ahead
@@ -198,7 +199,8 @@ untrusted code on the server.
 For an exposed deployment:
 
 - terminate TLS in a reverse proxy and use `--secure-cookies` (or `--trust-proxy` when the proxy is
-  loopback and forwards `X-Forwarded-Proto: https`); do not expose the plain HTTP listener
+  loopback and forwards `X-Forwarded-Proto: https` and `X-Forwarded-For`); do not expose the plain
+  HTTP listener
 - run Why as a dedicated, non-root service account with least-privilege filesystem permissions
 - keep the SQLite database outside the web root, using an explicit `--db` path
 - keep regular, protected backups outside the web root and test restoring them
@@ -354,7 +356,9 @@ Built-in methods:
 - Hashes: `keys`, `values`, `length`/`size`, `has_key?`, `each` with a block
 - Numbers: `to_i`, `to_f`, `abs`, `round`
 - Functions: `str(x)`, `int(x)`, `float(x)`, `redirect(path)`, `redirect_back(fallback)`,
-  `status(code)`, `halt(code)`, `validate(form, rules)`, `pbkdf2(password, salt, iterations)`
+  `status(code)`, `halt(code)`, `validate(form, rules)`, `pbkdf2(password, salt, iterations)`,
+  `password_hash(password, iterations)`, `password_matches(password, stored)`,
+  `password_needs_rehash(stored, iterations)`
 
 ## Views
 
@@ -387,6 +391,14 @@ is `0` and still truthy; use `posts.length > 0` for an empty state.
 SQLite, at `<site>/data.db` by default (`--db` overrides it); point `--db` outside the site folder
 for an exposed deployment. One connection per request.
 
+Connections enable `PRAGMA foreign_keys`, so a declared `references` clause is enforced and
+`on delete cascade` works. The migration runner turns enforcement off while a migration rebuilds a
+table and runs `foreign_key_check` before recording it.
+
+A migration file is recorded with a SHA-256 checksum when it runs; editing it afterwards raises
+instead of being ignored, so add a new file. Statements split at top-level semicolons, so a
+string or a `CREATE TRIGGER ... BEGIN ... END` body keeps its own.
+
 ```ruby
 posts = db.query("select * from posts order by id desc")   # list of hashes
 post  = db.get("select * from posts where id = ?", id)     # first row or nil
@@ -404,8 +416,9 @@ db.query("select * from posts where user_id = :who or id in (select post_id from
 db.query("select * from posts where id = ? and user_id = :who", id, who: uid)  # mixed with ?
 ```
 
-Names are checked against the SQL: a missing value and an unused name both raise. Use `#{}` only
-to build SQL structure, never to insert values. An identifier cannot be a parameter, so a page
+Names are checked against the SQL: a missing value and an unused name both raise. Numbered
+placeholders such as `?1` are rejected; use `?` or a name. Use `#{}` only to build SQL structure,
+never to insert values. An identifier cannot be a parameter, so a page
 that must choose a table or column passes it through an explicit allowlist:
 
 ```ruby
@@ -431,7 +444,8 @@ re-inserts rows; an ephemeral host that starts empty still gets its demo users. 
 - `form` — POSTed form fields as strings, empty on GET. Only `application/x-www-form-urlencoded`
   bodies are read (64 KiB cap).
 - `request` — a hash with `method`, `path`, `query`, `params`, `form` and `remote` (the caller's IP
-  address, for throttling or auditing).
+  address, for throttling or auditing; behind `--trust-proxy`, a loopback proxy's last
+  `X-Forwarded-For` hop replaces the socket peer).
 - `flash` — one-shot messages. `flash.set("notice", "…")` stores a value for the next page
   request, where `{{flash.notice}}` can read it; the request after that no longer has it. Messages
   live in a bounded, expiring in-memory store keyed by a server-issued `why_session` cookie;
@@ -469,8 +483,22 @@ so the cost can be raised later without invalidating rows:
 pbkdf2-sha256$120000$<salt>$<key>
 ```
 
-Compare with `pbkdf2(password, salt, rounds) == stored_key`; generate a fresh random salt per
-account and never store the password itself.
+`password_matches(password, stored)` parses that row and compares the keys in constant time; a
+malformed row is a failed match. `password_hash(password, iterations)` generates a fresh 16-byte
+salt and returns the row to store. `password_needs_rehash(stored, iterations)` is true when the
+row is malformed or costs less than `iterations`, so a sign-in can upgrade it while the password
+is in hand:
+
+```
+if user != nil and password_matches(password, user.password_hash)
+  if password_needs_rehash(user.password_hash, rounds())
+    db.exec("update users set password_hash = ? where id = ?",
+            password_hash(password, rounds()), user.id)
+  end
+end
+```
+
+Never store the password itself.
 
 ## Responses
 

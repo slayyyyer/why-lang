@@ -22,11 +22,11 @@ public final class Main {
         }
 
         Path directory = Path.of(".");
-        String host = env("HOST", "127.0.0.1");
-        int port = envPort(8080);
-        Path db = envDb();
+        String host = null;
+        Integer port = null;
+        Path db = null;
         boolean diagnostics = false;
-        boolean secureCookies = envFlag("WHY_SECURE_COOKIES");
+        Boolean secureCookies = null;
         boolean trustProxy = false;
         boolean check = args.length > 0 && args[0].equals("check");
 
@@ -107,6 +107,12 @@ public final class Main {
             return;
         }
 
+        // A flag wins over the environment, including when the environment value is malformed.
+        if (host == null) host = env("HOST", "127.0.0.1");
+        int resolvedPort = port == null ? envPort(8080) : port;
+        if (db == null) db = envDb();
+        boolean resolvedSecure = secureCookies == null ? envFlag("WHY_SECURE_COOKIES") : secureCookies;
+
         Path dbFile = db == null ? root.resolve("data.db") : db.toAbsolutePath().normalize();
         boolean freshDb = !Files.exists(dbFile);
         try {
@@ -139,7 +145,7 @@ public final class Main {
             return;
         }
         try {
-            if (Seeds.apply(root, dbFile, freshDb, diagnostics) > 0) {
+            if (Seeds.apply(root, dbFile, freshDb, diagnostics)) {
                 System.out.println("why: applied seed.sql to the fresh development database");
             }
         } catch (RuntimeException | IOException e) {
@@ -149,7 +155,7 @@ public final class Main {
 
         Site site = new Site(root, dbFile);
         try {
-            WhyServer server = new WhyServer(site, host, port, diagnostics, secureCookies, trustProxy);
+            WhyServer server = new WhyServer(site, host, resolvedPort, diagnostics, resolvedSecure, trustProxy);
             server.start();
             String shownHost = server.address().getAddress().isLoopbackAddress() ? "localhost" : host;
             System.out.println("Why is serving " + root + " at http://" + shownHost + ":" + server.port());
@@ -224,7 +230,8 @@ public final class Main {
                       --dev         show source, SQL errors and stack traces in 500 pages;
                                     applies seed.sql when the database is fresh
                       --secure-cookies  mark session cookies Secure (use with TLS)
-                      --trust-proxy trust X-Forwarded-Proto: https from a loopback proxy
+                      --trust-proxy trust X-Forwarded-Proto and X-Forwarded-For from
+                                    a loopback proxy
                   -h, --help        show this help
 
                 Environment: PORT, HOST, WHY_DB and WHY_SECURE_COOKIES supply the defaults
