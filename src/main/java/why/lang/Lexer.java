@@ -11,7 +11,7 @@ public final class Lexer {
 
     private static final Set<String> KEYWORDS = Set.of(
             "def", "end", "if", "elsif", "else", "unless", "while", "return",
-            "break", "next", "true", "false", "nil", "and", "or", "not", "do", "then");
+            "break", "next", "yield", "true", "false", "nil", "and", "or", "not", "do", "then");
 
     private static final Set<String> TWO_CHAR_OPERATORS = Set.of(
             "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "=>");

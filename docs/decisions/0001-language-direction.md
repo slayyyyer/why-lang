@@ -28,8 +28,9 @@ Reasons:
 ## Consequences
 
 - `NOTES.md` no longer lists language drift as an open question; it points here.
-- Custom template helpers stay deferred. Unifying a template block with a language block requires a
-  first-class block value and a way to call it, most likely `yield` inside a `def`. That is a
-  deliberate language addition for a later version, not a bug fix.
+- Custom template helpers are implemented later in this release: a page `def` called as
+  `{{#name ...}}` receives a first-class block, `yield` and `block.call` render it, and
+  `block.inverse` renders `{{else}}`. `yield` also invokes a language block passed as
+  `f() do ... end`.
 - A `{ }`-block dialect is out of scope. Anyone who wants it can treat this document as the reason
   it is not on the roadmap.

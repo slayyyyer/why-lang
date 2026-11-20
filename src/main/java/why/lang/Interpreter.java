@@ -25,6 +25,8 @@ public final class Interpreter {
 
     private final Map<String, Function> functions = new HashMap<>();
     private final ExecutionBudget budget;
+    /** Blocks visible to {@code yield}, innermost last. A null entry means "none" for that call. */
+    private final List<Block> yieldScopes = new ArrayList<>();
     private int callDepth;
 
     public Interpreter(Map<String, Ast.Def> defs, Scope globals) {
@@ -135,6 +137,7 @@ public final class Interpreter {
             for (Ast.Pair pair : hash.pairs()) out.put(eval(pair.key(), scope), eval(pair.value(), scope));
             return out;
         }
+        if (expr instanceof Ast.Yield yield) return yieldBlock(yield, scope);
         if (expr instanceof Ast.Var var) return scope.get(var.name());
         if (expr instanceof Ast.Get get) return property(eval(get.target(), scope), get.name(), get.line());
         if (expr instanceof Ast.Index index) return index(eval(index.target(), scope), eval(index.index(), scope), index.line());
@@ -176,13 +179,41 @@ public final class Interpreter {
 
         if (call.target() == null) {
             Function fn = functions.get(call.name());
-            if (fn != null) return invoke(fn, args);
+            if (fn != null) {
+                return invoke(fn, args, block == null ? null : new StatementBlock(block), true);
+            }
             return builtin(call.name(), args, call.line());
         }
         return method(eval(call.target(), scope), call.name(), args, block, call.line());
     }
 
+    /**
+     * Calls a page def from a template block helper. The block is what {@code yield} inside the def
+     * renders; {@code ownYield} makes that block belong to this call, as in Ruby.
+     */
+    public Object callFunction(String name, List<Object> args, Block block, int line) {
+        Function fn = functions.get(name);
+        if (fn == null) {
+            throw new WhyError("undefined block helper '" + name + "'" + suggestFunction(name), null, line);
+        }
+        return invoke(fn, args, block, true);
+    }
+
+    private Object yieldBlock(Ast.Yield yield, Scope scope) {
+        Block block = yieldScopes.isEmpty() ? null : yieldScopes.get(yieldScopes.size() - 1);
+        if (block == null) {
+            throw new WhyError("'yield' needs a block; this def was called without one", null, yield.line());
+        }
+        List<Object> args = new ArrayList<>();
+        for (Ast.Expr arg : yield.args()) args.add(eval(arg, scope));
+        return block.yield(args);
+    }
+
     private Object invoke(Function fn, List<Object> args) {
+        return invoke(fn, args, null, false);
+    }
+
+    private Object invoke(Function fn, List<Object> args, Block block, boolean ownYield) {
         if (callDepth >= MAX_CALL_DEPTH) {
             throw new WhyError("call depth budget exceeded");
         }
@@ -191,6 +222,8 @@ public final class Interpreter {
         for (int i = 0; i < fn.params().size(); i++) {
             scope.define(fn.params().get(i), i < args.size() ? args.get(i) : null);
         }
+        scope.define("block", block);
+        if (ownYield) yieldScopes.add(block);
         try {
             return execBody(fn.body(), scope);
         } catch (ReturnSignal signal) {
@@ -198,6 +231,7 @@ public final class Interpreter {
         } catch (WhyError e) {
             throw e.locate(fn.file(), e.line());
         } finally {
+            if (ownYield) yieldScopes.remove(yieldScopes.size() - 1);
             callDepth--;
         }
     }
@@ -327,6 +361,15 @@ public final class Interpreter {
             } catch (WhyError e) {
                 throw e.atLine(line);
             }
+        }
+
+        if (receiver instanceof Block callable) {
+            return switch (name) {
+                case "call" -> callable.yield(args);
+                case "inverse" -> callable.inverse();
+                default -> throw new WhyError(
+                        "block has no method '" + name + "' (try call or inverse)", null, line);
+            };
         }
 
         if (receiver instanceof List<?> raw) {
@@ -514,6 +557,20 @@ public final class Interpreter {
     }
 
     // ---- control flow ---------------------------------------------------
+
+    /** A language block ({@code do |x| ... end}) as a value a def can yield. */
+    private final class StatementBlock implements Block {
+        private final Function function;
+
+        StatementBlock(Function function) {
+            this.function = function;
+        }
+
+        @Override
+        public Object yield(List<Object> args) {
+            return invoke(function, args);
+        }
+    }
 
     private static final class ReturnSignal extends RuntimeException {
         private final Object value;

@@ -140,7 +140,7 @@ Why: the runtime's trust model is the caveat, not its operability.
 Done when the repository carries a Dockerfile and a systemd unit, SIGTERM drains in-flight requests,
 `/health` answers without touching a page, and the request log carries an id.
 
-### [ ] 13. Classpath sites without temp extraction
+### [x] 13. Classpath sites without temp extraction
 
 `Site.fromClasspath()` extracts the packaged site to a temporary directory.
 
@@ -148,6 +148,11 @@ Why: it forces a writable `/tmp` and repeats work on every start. Reading resour
 removes both and matters for read-only container filesystems.
 
 Done when a packaged site serves with no temporary directory.
+
+Done: `Site` now keeps a list of roots and `ClasspathSite` opens each indexed jar as a zip
+filesystem in place, so pages, imports, static files and migrations are read straight from the jar.
+The default database moved to `data.db` in the working directory, since there is no extracted
+folder left to hold it.
 
 ### [x] 14. Published Javadoc
 
@@ -160,7 +165,7 @@ Done when the Pages build publishes Javadoc under `docs/api`.
 
 ## The language's next headline
 
-### [~] 15. Custom template helpers, block-call syntax, and the drift decision
+### [x] 15. Custom template helpers, block-call syntax, and the drift decision
 
 `NOTES.md` records that `{{#if}}`, `{{#unless}}` and `{{#each}}` are the only blocks, that a `def`
 can receive a language block but a template cannot call it, and that there is no `yield` or
@@ -173,6 +178,11 @@ as accidental.
 Done when a page-defined helper can render a template block, and the drift decision is written
 down.
 
+Done: a page `def` can be called as `{{#name args}}...{{/name}}`; `yield` and `block.call` render the
+body, `yield(value)` binds `value` to `it`, and `block.inverse` renders `{{else}}`. `yield` also
+invokes a language block passed to a def. The language decision stays recorded in
+`docs/decisions/0001-language-direction.md`.
+
 ## Where this pass left off
 
 - Item 2 is configured (`com.gradle.plugin-publish` 1.3.0, website and VCS URLs) but cannot be
@@ -181,10 +191,10 @@ down.
   missing piece, so the launcher needs `mvn package` or a `WHY_JAR` path.
 - Item 11 took the second half of its "done when": `tools/check-docs.mjs` fails when the README and
   the site disagree. Generation from one source is still open.
-- Item 13 is untouched. `Site` is path-based throughout (`PageLoader`, `PageCompiler`, `WhyServer`),
-  so serving from a jar without extraction is an architectural change, not a patch.
-- Item 15 records the language decision in `docs/decisions/0001-language-direction.md`. Custom
-  template blocks are still deferred; they need a first-class block value and a `yield`-style call.
+- Item 13 is done: `ClasspathSite` opens each indexed jar as a zip filesystem and `Site` reads from
+  one or more roots in place, so a packaged site serves with no temporary folder.
+- Item 15 is done: custom template blocks call page defs, and `yield`/`block.call`/`block.inverse`
+  render their bodies. The drift decision remains in `docs/decisions/0001-language-direction.md`.
 
 ## Deliberately not yet
 

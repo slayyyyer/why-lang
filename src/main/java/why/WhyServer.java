@@ -371,8 +371,14 @@ public final class WhyServer {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
         long size = Files.size(file);
         if (size > AllocationLimits.STATIC_ASSET_BYTES) throw assetTooLarge(file, size);
-        String etag = "\"" + Long.toHexString(size) + "-"
-                + Long.toHexString(Files.getLastModifiedTime(file).toMillis()) + "\"";
+        long modified;
+        try {
+            modified = Files.getLastModifiedTime(file).toMillis();
+        } catch (IOException e) {
+            // Some zip entries carry no timestamp; size plus a zero still identifies the bytes.
+            modified = 0L;
+        }
+        String etag = "\"" + Long.toHexString(size) + "-" + Long.toHexString(modified) + "\"";
         exchange.getResponseHeaders().set("ETag", etag);
         exchange.getResponseHeaders().set("Cache-Control", "public, max-age=60");
         String ifNoneMatch = exchange.getRequestHeaders().getFirst("If-None-Match");

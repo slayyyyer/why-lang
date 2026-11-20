@@ -167,7 +167,23 @@ end</code></pre></div>
 {{&gt; header}}</code></pre></div>
         <p>Inside <code>{{#each}}</code> the current item is <code>it</code>; <code>@index</code>, <code>@first</code> and <code>@last</code> are available, plus <code>@key</code> when iterating a hash. A mustache can call a function: <code>{{shout(post.title)}}</code>.</p>
         <p>Template truthiness follows the language: only <code>nil</code> and <code>false</code> are falsy, so an empty list's <code>length</code> is <code>0</code> and still truthy. Compare it with <code>posts.length &gt; 0</code> when you need the empty branch.</p>
-        <p>Custom block helpers are not supported yet. Template blocks are limited to <code>if</code>, <code>unless</code> and <code>each</code>; a page cannot define its own <code>{{#name}}</code>. A <code>def</code> can take a language block (<code>do |x| ... end</code>), but that block cannot be called from a view.</p>
+        <p>Any page <code>def</code> can also be called as a block, so the block set is not fixed. Inside the def, <code>yield</code> renders the body in the caller's scope and <code>yield(value)</code> binds <code>value</code> to <code>it</code>; <code>block.call</code> is the same call, and <code>block.inverse</code> renders the <code>{{else}}</code> section.</p>
+        <div class="code"><div class="code-title">site/helpers.why</div><pre><code>def card(title)
+  "&lt;section&gt;&lt;h2&gt;" + title + "&lt;/h2&gt;" + yield + "&lt;/section&gt;"
+end
+
+def list(items)
+  out = ""
+  items.each do |item|
+    out = out + yield(item)
+  end
+  out
+end
+
+view:
+{{#card "Hello"}}&lt;p&gt;Body text.&lt;/p&gt;{{/card}}
+{{#list posts}}&lt;li&gt;{{it.title}}&lt;/li&gt;{{/list}}</code></pre></div>
+        <p>A helper's return value is inserted as markup and not escaped again; the body still escapes its own mustaches. A <code>def</code> returns its last expression statement, not an <code>if</code>'s value, so a branch that produces the markup has to <code>return</code> it. A language block passed as <code>f() do ... end</code> can also be <code>yield</code>ed.</p>
 
         <h2 id="request">Request globals</h2>
         <div class="table-wrap">
@@ -246,7 +262,6 @@ end
           <li><strong>Cookies beyond the two the server issues.</strong> Pages cannot read or set arbitrary cookies.</li>
           <li><strong>Multipart forms or uploads.</strong> Only <code>application/x-www-form-urlencoded</code> bodies are read.</li>
         </ul>
-        <p>Custom block helpers are also not supported yet; see <a href="#views">Views</a>.</p>
 
         <h2 id="cli">The command line</h2>
         <p>With the Gradle plugin, the tasks cover the usual cases:</p>

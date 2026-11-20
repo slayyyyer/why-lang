@@ -45,10 +45,10 @@ public final class PageCompiler {
         collect(page, display, defs, partials, stack, List.of(), origins, defOrigins);
 
         Template view = TemplateParser.parse(page.viewSource(), display, page.viewLine());
-        view.validatePartials(partials);
+        view.validate(partials, defs.keySet());
         for (Map.Entry<Template, List<WhyError.Frame>> entry : origins.entrySet()) {
             try {
-                entry.getKey().validatePartials(partials);
+                entry.getKey().validate(partials, defs.keySet());
             } catch (WhyError e) {
                 List<WhyError.Frame> via = entry.getValue();
                 for (int i = via.size() - 1; i >= 0; i--) e.at(via.get(i).file(), via.get(i).line());
@@ -119,10 +119,9 @@ public final class PageCompiler {
     private Path resolve(Path pageFile, String name) {
         Path directory = pageFile.toAbsolutePath().getParent();
         Path local = directory == null ? null : directory.resolve(name + Site.PAGE_EXTENSION);
-        if (local != null && Files.isRegularFile(local)) {
-            return site.isInsideSite(local) ? local.normalize() : null;
+        if (local != null && Files.isRegularFile(local) && site.isInsideSite(local)) {
+            return local.normalize();
         }
-        Path inRoot = site.root().resolve(name + Site.PAGE_EXTENSION).normalize();
-        return Files.isRegularFile(inRoot) && site.isInsideSite(inRoot) ? inRoot : null;
+        return site.page(name);
     }
 }

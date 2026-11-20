@@ -44,6 +44,21 @@ public final class Parser {
         return body;
     }
 
+    /** Comma-separated expressions, as found after a custom {@code {{#helper ...}}} name. */
+    public List<Ast.Expr> parseExpressionList() {
+        List<Ast.Expr> out = new ArrayList<>();
+        skipSeparators();
+        if (peek().type() == Token.Type.EOF) return out;
+        do {
+            skipSeparators();
+            out.add(expression());
+            skipSeparators();
+        } while (matchOp(","));
+        Token t = peek();
+        if (t.type() != Token.Type.EOF) throw error(t, "unexpected '" + t.text() + "'");
+        return out;
+    }
+
     /** One expression, as found inside a {@code {{...}}} tag. */
     public Ast.Expr parseExpressionOnly() {
         skipSeparators();
@@ -99,6 +114,7 @@ public final class Parser {
                     next();
                     yield new Ast.Next(t.line());
                 }
+                case "yield" -> new Ast.ExprStmt(expression(), t.line());
                 default -> throw error(t, "unexpected keyword '" + t.text() + "'");
             };
         }
@@ -300,6 +316,7 @@ public final class Parser {
                     case "true" -> new Ast.BoolLit(true, t.line());
                     case "false" -> new Ast.BoolLit(false, t.line());
                     case "nil" -> new Ast.NilLit(t.line());
+                    case "yield" -> new Ast.Yield(checkOp("(") ? arguments() : List.of(), t.line());
                     default -> throw error(t, "unexpected keyword '" + t.text() + "'");
                 };
             case OP:

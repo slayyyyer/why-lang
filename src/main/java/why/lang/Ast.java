@@ -68,6 +68,9 @@ public final class Ast {
     /** {@code f(...)} when target is null, otherwise {@code recv.name(...)}; block is optional. */
     public record Call(Expr target, String name, List<Expr> args, Block block, int line) implements Expr {}
 
+    /** {@code yield} or {@code yield(args)}: invokes the block the current def was called with. */
+    public record Yield(List<Expr> args, int line) implements Expr {}
+
     public record Block(List<String> params, List<Stmt> body) {}
 
     public record Binary(String op, Expr left, Expr right, int line) implements Expr {}

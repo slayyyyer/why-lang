@@ -4,12 +4,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.stream.Stream;
 
 import why.lang.Db;
@@ -29,16 +28,25 @@ public final class Migrations {
 
     /** Applies pending migrations and returns how many ran. A missing folder means nothing to do. */
     public static int apply(Path siteRoot, Path dbFile) throws IOException {
-        Path directory = siteRoot.resolve(DIRECTORY);
-        if (!Files.isDirectory(directory)) return 0;
+        return apply(List.of(siteRoot), dbFile);
+    }
 
-        List<Path> files = new ArrayList<>();
-        try (Stream<Path> stream = Files.list(directory)) {
-            stream.filter(path -> path.getFileName().toString().endsWith(".sql"))
-                    .filter(Files::isRegularFile)
-                    .sorted(Comparator.comparing(path -> path.getFileName().toString()))
-                    .forEach(files::add);
+    /**
+     * Applies migrations from every root, in filename order. A name repeated across roots is one
+     * migration: the first root that carries it wins.
+     */
+    public static int apply(List<Path> siteRoots, Path dbFile) throws IOException {
+        Map<String, Path> files = new TreeMap<>();
+        for (Path siteRoot : siteRoots) {
+            Path directory = siteRoot.resolve(DIRECTORY);
+            if (!Files.isDirectory(directory)) continue;
+            try (Stream<Path> stream = Files.list(directory)) {
+                stream.filter(path -> path.getFileName().toString().endsWith(".sql"))
+                        .filter(Files::isRegularFile)
+                        .forEach(path -> files.putIfAbsent(path.getFileName().toString(), path));
+            }
         }
+        if (files.isEmpty()) return 0;
 
         int applied = 0;
         try (Db db = new Db(dbFile)) {
@@ -52,12 +60,12 @@ public final class Migrations {
                 }
             }
 
-            for (Path file : files) {
-                String name = file.getFileName().toString();
+            for (Map.Entry<String, Path> entry : files.entrySet()) {
+                String name = entry.getKey();
                 if (done.contains(name)) continue;
                 String script;
                 try {
-                    script = Files.readString(file, StandardCharsets.UTF_8);
+                    script = Files.readString(entry.getValue(), StandardCharsets.UTF_8);
                 } catch (IOException e) {
                     throw new IOException("cannot read migration '" + name + "': " + e.getMessage(), e);
                 }

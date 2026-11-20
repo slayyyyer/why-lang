@@ -8,87 +8,123 @@ import java.net.JarURLConnection;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Enumeration;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
-import java.util.jar.JarEntry;
-import java.util.jar.JarFile;
+import java.util.Map;
 
-/** Extracts the site that the Why Gradle plugin packages under {@code META-INF/why-site}. */
+/**
+ * Resolves the site that the Why Gradle plugin packages under {@code META-INF/why-site}.
+ *
+ * <p>Nothing is copied. An indexed folder is used where it is, and an indexed jar is opened as a
+ * zip filesystem whose {@code META-INF/why-site} directory becomes a site root. Multiple jars are
+ * merged by page name; a duplicate path is an error. Every filesystem opened here is handed back so
+ * the owning {@link Site} can close it.
+ */
 final class ClasspathSite {
     static final String INDEX = "META-INF/why-site.index";
-    static final String ROOT = "META-INF/why-site/";
+    private static final String SITE_DIR = "why-site";
+    private static final String ROOT_DIR = "META-INF/" + SITE_DIR;
+    static final String ROOT = ROOT_DIR + "/";
 
     private ClasspathSite() {}
 
-    static Path extract(ClassLoader loader) throws IOException {
+    static List<Path> open(ClassLoader loader, List<FileSystem> opened) throws IOException {
+        if (loader == null) throw new IOException("no class loader to read the Why site from");
         Enumeration<URL> indexes = loader.getResources(INDEX);
         if (!indexes.hasMoreElements()) {
             throw new IOException("no Why site resources on the classpath; missing " + INDEX);
         }
-        Path target = Files.createTempDirectory("why-site-");
-        target.toFile().deleteOnExit();
-        Set<String> seen = new HashSet<>();
+
+        List<Path> roots = new ArrayList<>();
+        Map<String, Path> seen = new HashMap<>();
+        Map<Path, FileSystem> jars = new HashMap<>();
         while (indexes.hasMoreElements()) {
-            extractIndex(indexes.nextElement(), target, seen);
+            URL index = indexes.nextElement();
+            Path root = rootOf(index, jars, opened);
+            if (roots.contains(root)) continue;
+            for (String name : readIndex(indexPath(index, jars, opened))) {
+                String normalized = normalize(name);
+                Path previous = seen.putIfAbsent(normalized, root);
+                if (previous != null) {
+                    throw new IOException("duplicate Why site resource '" + name + "' on the classpath");
+                }
+                if (!Files.isRegularFile(root.resolve(normalized))) {
+                    throw new IOException("missing Why site resource '" + ROOT + normalized + "'");
+                }
+            }
+            roots.add(root);
         }
-        return target;
+        return roots;
     }
 
-    private static void extractIndex(URL index, Path target, Set<String> seen) throws IOException {
+    /** The site root for one index URL, opening its jar the first time it is seen. */
+    private static Path rootOf(URL index, Map<Path, FileSystem> jars, List<FileSystem> opened)
+            throws IOException {
         if ("file".equals(index.getProtocol())) {
-            Path indexPath = path(index);
-            List<String> names;
-            try (InputStream in = Files.newInputStream(indexPath)) {
-                names = readIndex(in);
-            }
-            Path root = indexPath.getParent().resolve("why-site");
-            for (String name : names) {
-                Path out = targetFor(target, name, seen);
-                Path source = root.resolve(name).normalize();
-                if (!source.startsWith(root)) {
-                    throw new IOException("unsafe Why site resource name '" + name + "'");
-                }
-                if (!Files.isRegularFile(source)) {
-                    throw new IOException("missing Why site resource '" + source + "'");
-                }
-                prepare(out);
-                Files.copy(source, out, StandardCopyOption.REPLACE_EXISTING);
-                register(out, target);
-            }
-            return;
+            // The index sits beside its folder: META-INF/why-site.index -> META-INF/why-site.
+            return path(index).getParent().resolve(SITE_DIR);
         }
         if ("jar".equals(index.getProtocol())) {
-            JarURLConnection connection = (JarURLConnection) index.openConnection();
-            connection.setUseCaches(false);
-            try (JarFile jar = new JarFile(path(connection.getJarFileURL()).toFile())) {
-                JarEntry indexEntry = jar.getJarEntry(INDEX);
-                if (indexEntry == null) throw new IOException("missing Why site index '" + INDEX + "'");
-                List<String> names;
-                try (InputStream in = jar.getInputStream(indexEntry)) {
-                    names = readIndex(in);
-                }
-                for (String name : names) {
-                    Path out = targetFor(target, name, seen);
-                    JarEntry entry = jar.getJarEntry(ROOT + name);
-                    if (entry == null) {
-                        throw new IOException("missing Why site resource '" + ROOT + name + "'");
-                    }
-                    prepare(out);
-                    try (InputStream in = jar.getInputStream(entry)) {
-                        Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
-                    }
-                    register(out, target);
-                }
-            }
-            return;
+            FileSystem filesystem = fileSystem(index, jars, opened);
+            return filesystem.getPath("/" + ROOT_DIR);
         }
         throw new IOException("unsupported Why site resource URL: " + index);
+    }
+
+    /** The index file inside the same root the site will be read from. */
+    private static Path indexPath(URL index, Map<Path, FileSystem> jars, List<FileSystem> opened)
+            throws IOException {
+        if ("file".equals(index.getProtocol())) return path(index);
+        if ("jar".equals(index.getProtocol())) {
+            return fileSystem(index, jars, opened).getPath("/" + INDEX);
+        }
+        throw new IOException("unsupported Why site resource URL: " + index);
+    }
+
+    private static FileSystem fileSystem(URL index, Map<Path, FileSystem> jars, List<FileSystem> opened)
+            throws IOException {
+        JarURLConnection connection = (JarURLConnection) index.openConnection();
+        connection.setUseCaches(false);
+        Path jar = path(connection.getJarFileURL());
+        FileSystem filesystem = jars.get(jar);
+        if (filesystem != null) return filesystem;
+        try {
+            filesystem = FileSystems.newFileSystem(jar);
+        } catch (IOException e) {
+            throw new IOException("cannot open Why site jar " + jar + ": " + e.getMessage(), e);
+        }
+        jars.put(jar, filesystem);
+        opened.add(filesystem);
+        return filesystem;
+    }
+
+    /**
+     * A site-relative name, normalized to forward slashes. Absolute paths, backslashes, drive
+     * letters and paths that climb above the root are rejected before anything touches the site.
+     */
+    private static String normalize(String name) throws IOException {
+        if (name.isEmpty() || name.startsWith("/") || name.contains("\\") || name.contains(":")) {
+            throw new IOException("unsafe Why site resource name '" + name + "'");
+        }
+        Path relative = Path.of(name).normalize();
+        String normalized = relative.toString().replace('\\', '/');
+        if (relative.isAbsolute() || normalized.isEmpty() || normalized.equals("..")
+                || normalized.startsWith("../")) {
+            throw new IOException("unsafe Why site resource name '" + name + "'");
+        }
+        return normalized;
+    }
+
+    private static List<String> readIndex(Path index) throws IOException {
+        try (InputStream in = Files.newInputStream(index)) {
+            return readIndex(in);
+        }
     }
 
     private static List<String> readIndex(InputStream in) throws IOException {
@@ -102,39 +138,6 @@ final class ClasspathSite {
             }
         }
         return names;
-    }
-
-    private static Path targetFor(Path target, String name, Set<String> seen) throws IOException {
-        Path out = target.resolve(name).normalize();
-        if (name.startsWith("/") || name.contains("\\") || !out.startsWith(target)) {
-            throw new IOException("unsafe Why site resource name '" + name + "'");
-        }
-        Path relative = target.relativize(out);
-        if (relative.toString().isEmpty()) {
-            throw new IOException("unsafe Why site resource name '" + name + "'");
-        }
-        if (!seen.add(relative.toString().replace('\\', '/'))) {
-            throw new IOException("duplicate Why site resource '" + name + "' on the classpath");
-        }
-        return out;
-    }
-
-    private static void prepare(Path out) throws IOException {
-        Files.createDirectories(out.getParent());
-    }
-
-    private static void register(Path out, Path target) {
-        List<Path> directories = new ArrayList<>();
-        Path directory = out.getParent();
-        while (directory != null && directory.startsWith(target) && !directory.equals(target)) {
-            directories.add(directory);
-            directory = directory.getParent();
-        }
-        // deleteOnExit removes in reverse registration order: files, deepest folder, then target.
-        for (int i = directories.size() - 1; i >= 0; i--) {
-            directories.get(i).toFile().deleteOnExit();
-        }
-        out.toFile().deleteOnExit();
     }
 
     private static Path path(URL url) throws IOException {

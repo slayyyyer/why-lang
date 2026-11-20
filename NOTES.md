@@ -70,14 +70,11 @@ The specification I was given ends in the middle of the `imports:` rules, so the
 - **Language drift.** Resolved: the Ruby-shaped language is the decision, recorded in
   [docs/decisions/0001-language-direction.md](docs/decisions/0001-language-direction.md). The
   `{ }`-block simplification is rejected rather than deferred.
-- **Custom block helpers.** Not supported today. Template blocks are limited to `if`, `unless` and
-  `each`; an unknown `{{#name}}` is an error. A user `def` can receive a language block
-  (`do |x| ... end`), but template blocks and language blocks are separate concepts. Whether to
-  unify them is open.
-- **Block-call syntax.** No syntax exists today for calling a block from a user-defined function;
-  user functions receive ordinary arguments, and a `do` block can only be attached to a call.
-  If custom helpers are added, choose explicit `block.call` or Ruby-style `yield`; the current
-  parser and interpreter have neither a block-call expression nor a `yield` keyword.
+- **Custom block helpers.** Resolved: any page `def` can be called as `{{#name ...}}...{{/name}}`.
+  `yield` (or `block.call`) renders the body, `yield(value)` binds `value` to `it`, and
+  `block.inverse` renders `{{else}}`.
+- **Block-call syntax.** Resolved: Ruby-style `yield` is the syntax, with `block.call` kept as the
+  explicit form on the block value. A `do ... end` block passed to a def can be yielded too.
 - **Parse cache wording.** The documentation brief asked for "parses it on request and caches the
   result", but the server currently re-reads and reparses every request; `PageCompiler` has no
   cache. Adding one is runtime behavior and was not done, so the docs say "parses it on request".

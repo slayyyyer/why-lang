@@ -6,7 +6,7 @@
 
   <groupId>io.github.slayyyyer</groupId>
   <artifactId>why-lang</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
   <packaging>jar</packaging>
   <name>why-lang</name>
   <description>A small, Ruby-flavored page language for the JVM.</description>

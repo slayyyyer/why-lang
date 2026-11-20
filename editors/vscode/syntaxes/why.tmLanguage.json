@@ -88,7 +88,7 @@
     "keyword": {
       "patterns": [
         {
-          "match": "\\b(if|elsif|else|end|unless|while|break|next|def|do|and|or|not|true|false|nil)\\b",
+          "match": "\\b(if|elsif|else|end|unless|while|break|next|yield|def|do|and|or|not|true|false|nil)\\b",
           "name": "keyword.control.why"
         }
       ]

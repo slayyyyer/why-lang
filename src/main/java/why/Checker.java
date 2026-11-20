@@ -2,7 +2,6 @@ package why;
 
 import java.io.IOException;
 import java.io.PrintStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -12,7 +11,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.stream.Stream;
 
 import why.lang.Ast;
 import why.lang.Interpreter;
@@ -68,10 +66,8 @@ public final class Checker {
     // ---- collecting ----------------------------------------------------
 
     private List<PageFile> discover() {
-        try (Stream<Path> walk = Files.walk(site.root())) {
-            return walk.filter(Files::isRegularFile)
-                    .filter(site::isPage)
-                    .filter(file -> !Site.isImportOnly(file)) // import-only files have no URL
+        try {
+            return site.pages().stream()
                     .map(file -> new PageFile(file, site.relative(file), urlOf(file)))
                     .sorted(Comparator.comparing(PageFile::url).thenComparing(PageFile::display))
                     .toList();
@@ -185,6 +181,8 @@ public final class Checker {
         } else if (expr instanceof Ast.Index index) {
             collectExpr(index.target(), known);
             collectExpr(index.index(), known);
+        } else if (expr instanceof Ast.Yield yield) {
+            for (Ast.Expr arg : yield.args()) collectExpr(arg, known);
         }
     }
 
@@ -238,6 +236,8 @@ public final class Checker {
         } else if (expr instanceof Ast.Index index) {
             findExpr(index.target(), known, undefined);
             findExpr(index.index(), known, undefined);
+        } else if (expr instanceof Ast.Yield yield) {
+            for (Ast.Expr arg : yield.args()) findExpr(arg, known, undefined);
         }
     }
 

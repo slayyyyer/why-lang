@@ -15,7 +15,7 @@ import why.lang.Parser;
 public final class TemplateParser {
 
     private static final Pattern NAME = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
-    private static final Set<String> BLOCKS = Set.of("if", "unless", "each");
+    private static final Set<String> BUILTIN_BLOCKS = Set.of("if", "unless", "each");
 
     private final String src;
     private final String file;
@@ -35,14 +35,16 @@ public final class TemplateParser {
     private static final class Frame {
         final String kind;
         final Ast.Expr expr;
+        final List<Ast.Expr> args;
         final int line;
         final List<Template.Node> body = new ArrayList<>();
         final List<Template.Node> otherwise = new ArrayList<>();
         boolean inElse;
 
-        Frame(String kind, Ast.Expr expr, int line) {
+        Frame(String kind, Ast.Expr expr, List<Ast.Expr> args, int line) {
             this.kind = kind;
             this.expr = expr;
+            this.args = args;
             this.line = line;
         }
     }
@@ -91,12 +93,23 @@ public final class TemplateParser {
                 String rest = tag.substring(1).trim();
                 int space = indexOfWhitespace(rest);
                 String kind = space < 0 ? rest : rest.substring(0, space);
-                String expression = space < 0 ? "" : rest.substring(space + 1).trim();
-                if (!BLOCKS.contains(kind)) throw new WhyError("unknown block '{{#" + kind + "}}'", file, tagLine);
-                if (expression.isEmpty()) throw new WhyError("'{{#" + kind + "}}' needs an expression", file, tagLine);
-                Ast.Expr expr = new Parser(expression, file, tagLine).parseExpressionOnly();
-                if (kind.equals("unless")) expr = new Ast.Unary("not", expr, tagLine);
-                stack.push(new Frame(kind, expr, tagLine));
+                String argumentText = space < 0 ? "" : rest.substring(space + 1).trim();
+                if (!NAME.matcher(kind).matches()) {
+                    throw new WhyError("block name '" + kind + "' is not a bare name", file, tagLine);
+                }
+                if (BUILTIN_BLOCKS.contains(kind)) {
+                    if (argumentText.isEmpty()) {
+                        throw new WhyError("'{{#" + kind + "}}' needs an expression", file, tagLine);
+                    }
+                    Ast.Expr expr = new Parser(argumentText, file, tagLine).parseExpressionOnly();
+                    if (kind.equals("unless")) expr = new Ast.Unary("not", expr, tagLine);
+                    stack.push(new Frame(kind, expr, List.of(), tagLine));
+                } else {
+                    List<Ast.Expr> args = argumentText.isEmpty()
+                            ? List.of()
+                            : new Parser(argumentText, file, tagLine).parseExpressionList();
+                    stack.push(new Frame(kind, null, args, tagLine));
+                }
                 continue;
             }
             if (lead == '/') {
@@ -108,9 +121,11 @@ public final class TemplateParser {
                 }
                 List<Template.Node> body = List.copyOf(frame.body);
                 List<Template.Node> otherwise = List.copyOf(frame.otherwise);
-                add(stack, root, frame.kind.equals("each")
-                        ? new Template.Each(frame.expr, body, otherwise, frame.line)
-                        : new Template.Block(frame.expr, body, otherwise, frame.line));
+                add(stack, root, switch (frame.kind) {
+                    case "each" -> new Template.Each(frame.expr, body, otherwise, frame.line);
+                    case "if", "unless" -> new Template.Block(frame.expr, body, otherwise, frame.line);
+                    default -> new Template.Helper(frame.kind, frame.args, body, otherwise, frame.line);
+                });
                 continue;
             }
             if (tag.equals("else")) {

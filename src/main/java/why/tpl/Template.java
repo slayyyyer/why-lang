@@ -1,10 +1,13 @@
 package why.tpl;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import why.WhyError;
 import why.lang.Ast;
+import why.lang.Block;
 import why.lang.Interpreter;
 import why.lang.Scope;
 import why.lang.Value;
@@ -27,6 +30,10 @@ public final class Template {
     public record Block(Ast.Expr cond, List<Node> body, List<Node> otherwise, int line) implements Node {}
 
     public record Each(Ast.Expr expr, List<Node> body, List<Node> otherwise, int line) implements Node {}
+
+    /** A page-defined {@code {{#name args}}} block, rendered by calling the def {@code name}. */
+    public record Helper(String name, List<Ast.Expr> args, List<Node> body, List<Node> otherwise,
+                         int line) implements Node {}
 
     private final String file;
     private final List<Node> nodes;
@@ -89,6 +96,12 @@ public final class Template {
                     renderNodes(out, branch, interp, scope, partials, depth);
                 } else if (node instanceof Each each) {
                     renderEach(out, each, interp, scope, partials, depth);
+                } else if (node instanceof Helper helper) {
+                    List<Object> args = new ArrayList<>();
+                    for (Ast.Expr arg : helper.args()) args.add(interp.eval(arg, scope));
+                    why.lang.Block body = new TemplateBlock(helper, interp, scope, partials, depth);
+                    // Helper output is markup the def already built, so it is not escaped again.
+                    out.append(Value.str(interp.callFunction(helper.name(), args, body, helper.line())));
                 }
             } catch (WhyError e) {
                 throw e.locate(file, e.line());
@@ -134,23 +147,72 @@ public final class Template {
 
     /** Reports missing partials while the page is compiled instead of when it is served. */
     public void validatePartials(Map<String, Template> partials) {
-        validateNodes(nodes, partials);
+        validate(partials, Set.of());
     }
 
-    private void validateNodes(List<Node> nodes, Map<String, Template> partials) {
+    /** Also checks that every custom block names a def the page can call. */
+    public void validate(Map<String, Template> partials, Set<String> helpers) {
+        validateNodes(nodes, partials, helpers);
+    }
+
+    private void validateNodes(List<Node> nodes, Map<String, Template> partials, Set<String> helpers) {
         for (Node node : nodes) {
             if (node instanceof Partial partial) {
                 if (!partials.containsKey(partial.name())) {
                     throw new WhyError("unknown partial '" + partial.name() + "'"
                             + Suggest.didYouMean(partial.name(), partials.keySet()), file, partial.line());
                 }
+            } else if (node instanceof Helper helper) {
+                if (!helpers.contains(helper.name())) {
+                    throw new WhyError("unknown block helper '" + helper.name() + "'"
+                            + Suggest.didYouMean(helper.name(), helpers), file, helper.line());
+                }
+                validateNodes(helper.body(), partials, helpers);
+                validateNodes(helper.otherwise(), partials, helpers);
             } else if (node instanceof Block block) {
-                validateNodes(block.body(), partials);
-                validateNodes(block.otherwise(), partials);
+                validateNodes(block.body(), partials, helpers);
+                validateNodes(block.otherwise(), partials, helpers);
             } else if (node instanceof Each each) {
-                validateNodes(each.body(), partials);
-                validateNodes(each.otherwise(), partials);
+                validateNodes(each.body(), partials, helpers);
+                validateNodes(each.otherwise(), partials, helpers);
             }
+        }
+    }
+
+    /** A template block as a def sees it: calling it renders the body in the caller's scope. */
+    private final class TemplateBlock implements why.lang.Block {
+        private final Helper helper;
+        private final Interpreter interp;
+        private final Scope scope;
+        private final Map<String, Template> partials;
+        private final int depth;
+
+        TemplateBlock(Helper helper, Interpreter interp, Scope scope,
+                      Map<String, Template> partials, int depth) {
+            this.helper = helper;
+            this.interp = interp;
+            this.scope = scope;
+            this.partials = partials;
+            this.depth = depth;
+        }
+
+        /** @param args the first argument becomes {@code it} in the rendered body */
+        @Override
+        public Object yield(List<Object> args) {
+            Scope body = args.isEmpty() ? scope : scope.child();
+            if (!args.isEmpty()) body.define("it", args.get(0));
+            return render(helper.body(), body);
+        }
+
+        @Override
+        public Object inverse() {
+            return render(helper.otherwise(), scope);
+        }
+
+        private String render(List<Node> nodes, Scope scope) {
+            StringBuilder out = new StringBuilder();
+            renderNodes(out, nodes, interp, scope, partials, depth + 1);
+            return out.toString();
         }
     }
 }

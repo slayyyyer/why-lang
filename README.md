@@ -29,7 +29,7 @@ pluginManagement {
 ```kotlin
 // build.gradle.kts
 plugins {
-    id("io.github.slayyyyer.why") version "0.1.0"
+    id("io.github.slayyyyer.why") version "0.1.1"
 }
 
 repositories {
@@ -76,7 +76,7 @@ src/why/index.why
 src/why/style.css
 ```
 
-The plugin applies `java-library`, adds the Why runtime (`io.github.slayyyyer:why-lang:0.1.0`) as an `api`
+The plugin applies `java-library`, adds the Why runtime (`io.github.slayyyyer:why-lang:0.1.1`) as an `api`
 dependency, copies `src/why` into the jar at `META-INF/why-site`, and writes a sorted
 `META-INF/why-site.index`. It adds:
 
@@ -109,10 +109,12 @@ WhyServer server = new WhyServer(site, 8080);
 server.start();
 ```
 
-`Site.fromClasspath()` extracts the indexed resources to a temporary folder and bootstraps
-`schema.sql` when the database does not exist. Pass an explicit `dbFile` to keep data across
-restarts. Resources from multiple jars merge when their page names differ; a duplicate path is an
-error.
+`Site.fromClasspath()` reads the indexed resources in place: an exploded site is used where it is,
+and a packaged jar is opened as a zip filesystem, so nothing is written to a temporary folder. It
+bootstraps `schema.sql` when the database does not exist; the default database is `data.db` in the
+working directory, and an explicit `dbFile` puts it elsewhere. Resources from multiple jars merge
+when their page names differ; a duplicate path is an error. A site opened from a jar keeps it open
+until the site is closed.
 
 ## Testing a site
 
@@ -375,6 +377,35 @@ Inside `{{#each}}` the current item is `it`; `@index`, `@first` and `@last` are 
 `{{posts.length}}` work. Only `nil` and `false` are falsy in views too, so an empty list's `length`
 is `0` and still truthy; use `posts.length > 0` for an empty state.
 
+### Custom block helpers
+
+Any page `def` can be called as a block, so the block set is not fixed:
+
+```ruby
+controller:
+def card(title)
+  "<section><h2>" + title + "</h2>" + yield + "</section>"
+end
+
+def list(items)
+  out = ""
+  items.each do |item|
+    out = out + yield(item)
+  end
+  out
+end
+
+view:
+{{#card "Hello"}}<p>Body text.</p>{{/card}}
+{{#list posts}}<li>{{it.title}}</li>{{/list}}
+```
+
+Inside the def, `yield` renders the body in the caller's scope and `yield(value)` binds `value` to
+`it` in it; `block.call` is the same call, and `block.inverse` renders the `{{else}}` section. A
+helper's return value is inserted as markup, so it is not escaped again; the body still escapes its
+own mustaches. A `def` returns its last expression statement, not an `if`'s value, so a branch that
+produces the markup has to `return` it.
+
 ## The `db` global
 
 SQLite, at `<site>/data.db` by default (`--db` overrides it); point `--db` outside the site folder
@@ -466,14 +497,14 @@ why-gradle-plugin/         the `io.github.slayyyyer.why` plugin and its TestKit 
 deploy/                    Dockerfile, systemd unit and reverse-proxy notes
 editors/vscode/            TextMate grammar and VS Code extension
 tools/check-docs.mjs       fails when the README and site copies drift
-roadmap.md                 ranked follow-ups after 0.1.0
+roadmap.md                 ranked follow-ups to this release
 .github/workflows/ci.yml     tests and demo site check
 .github/workflows/pages.yml  GitHub Pages publishing
 src/main/java/why/
   Main.java                CLI
   WhyServer.java           HTTP handler, errors, static files
   Site.java                the .why extension and URL → file resolution
-  ClasspathSite.java       extraction for sites packaged by the Gradle plugin
+  ClasspathSite.java       classpath roots for sites packaged by the Gradle plugin
   PageLoader.java          imports/controller/view section splitting
   PageCompiler.java        import resolution and parsing
   Program.java             a parsed page
