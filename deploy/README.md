@@ -24,7 +24,7 @@ carries an `X-Request-Id` that also appears at the start of the request log line
 
 ```bash
 sudo install -d /opt/why /srv/why /var/lib/why
-sudo cp -r bin target/why.jar /opt/why/       # after `mvn package`
+sudo cp -r bin build/libs/why.jar /opt/why/   # after `./gradlew shadowJar`
 sudo cp -r site/. /srv/why/site/
 sudo useradd --system --home /srv/why --shell /usr/sbin/nologin why
 sudo chown -R why:why /srv/why /var/lib/why
@@ -46,5 +46,13 @@ example.com {
 }
 ```
 
-Pages answering forms need `--secure-cookies` (or `WHY_SECURE_COOKIES` in the unit) so the session
-and CSRF cookies are marked `Secure` behind TLS.
+Pages answering forms need `--secure-cookies` (or `WHY_SECURE_COOKIES=1` in the unit) so the session
+and CSRF cookies are marked `Secure` behind the proxy. The CLI reads `PORT`, `HOST`, `WHY_DB` and
+`WHY_SECURE_COOKIES`, so environment variables can replace those flags. If the proxy terminates TLS
+and forwards `X-Forwarded-Proto: https` over the loopback listener, `--trust-proxy` derives `Secure`
+from that header instead and makes `request.remote` the last non-loopback `X-Forwarded-For` hop, so
+the per-IP login limit sees each client rather than the proxy. Both headers are ignored from any
+non-loopback peer.
+
+`seed.sql` is demo data and is never applied to production just because it exists: it only runs
+with `--dev` against a database that did not exist before that boot. Keep `--dev` off here.

@@ -1,6 +1,8 @@
 package why;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -157,6 +159,65 @@ class LangTest {
         assertEquals("WHY", scope.get("upper"));
         assertEquals(List.of("a", "b"), scope.get("parts"));
         assertEquals("a-b", scope.get("joined"));
+    }
+
+    @Test
+    void stringsCanBeIndexedByCharacter() {
+        Scope scope = run("""
+                first = "why"[0]
+                last = "why"[-1]
+                past = "why"[3]
+                empty = ""[0]
+                parts = "Ada Lovelace".split(" ")
+                head = parts[0]
+                tail = parts[1]
+                initials = head[0] + tail[0]
+                """);
+        assertEquals("w", scope.get("first"));
+        assertEquals("y", scope.get("last"));
+        assertNull(scope.get("past"));
+        assertNull(scope.get("empty"));
+        assertEquals("AL", scope.get("initials"));
+    }
+
+    @Test
+    void pbkdf2DerivesAnIteratedPasswordKey() {
+        // PBKDF2-HMAC-SHA256("password", "salt", 10000 iterations, 32 bytes).
+        assertEquals("5ec02b91a4b59c6f59dd5fbe4ca649ece4fa8568cdb8ba36cf41426e8805522b",
+                eval("pbkdf2(\"password\", \"salt\", 10000)"));
+
+        Scope scope = run("""
+                one = pbkdf2("whylang", "salt-a", 10000)
+                again = pbkdf2("whylang", "salt-a", 10000)
+                otherSalt = pbkdf2("whylang", "salt-b", 10000)
+                otherRounds = pbkdf2("whylang", "salt-a", 20000)
+                """);
+        assertEquals(scope.get("one"), scope.get("again"), "the same inputs must derive the same key");
+        assertNotEquals(scope.get("one"), scope.get("otherSalt"), "the salt must change the key");
+        assertNotEquals(scope.get("one"), scope.get("otherRounds"), "the rounds must change the key");
+        assertTrue(((String) scope.get("one")).matches("[0-9a-f]{64}"), (String) scope.get("one"));
+        assertTrue(Interpreter.BUILTINS.contains("pbkdf2"));
+    }
+
+    @Test
+    void pbkdf2RejectsImpossibleArguments() {
+        assertThrows(WhyError.class, () -> eval("pbkdf2(\"a\", \"s\", 0)"));
+        assertThrows(WhyError.class, () -> eval("pbkdf2(\"a\", \"s\", -5)"));
+        assertThrows(WhyError.class, () -> eval("pbkdf2(\"a\", \"s\", 1)"));
+        assertThrows(WhyError.class, () -> eval("pbkdf2(\"a\", \"s\", 9999)"));
+        assertThrows(WhyError.class, () -> eval("pbkdf2(\"a\", \"s\", 5000000)"));
+        assertThrows(WhyError.class, () -> eval("pbkdf2(\"a\")"));
+    }
+
+    @Test
+    void namedArgumentsBecomeATrailingHash() {
+        Scope scope = run("""
+                def pick(h)
+                  h.who
+                end
+                value = pick(who: 7)
+                """);
+        assertEquals(7L, scope.get("value"));
     }
 
     @Test

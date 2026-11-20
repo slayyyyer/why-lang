@@ -7,7 +7,9 @@ import com.sun.net.httpserver.HttpsExchange;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -32,6 +34,7 @@ import why.lang.ExecutionBudget;
 import why.lang.Flash;
 import why.lang.Redirect;
 import why.lang.Response;
+import why.lang.Session;
 import why.util.Html;
 
 /** The HTTP server: one handler, virtual threads, every request compiled and rendered from disk. */
@@ -52,12 +55,15 @@ public final class WhyServer {
     private final HttpServer server;
     private final boolean diagnostics;
     private final boolean secureCookies;
+    private final boolean trustProxy;
     private final long requestTimeoutMillis;
     private final Semaphore requestSlots = new Semaphore(MAX_CONCURRENT_REQUESTS);
     private final ExecutorService executor;
     private final ScheduledExecutorService timeouts;
     /** Bounded, expiring one-shot flashes keyed by server-issued session IDs. */
     private final FlashStore flashes = new FlashStore();
+    /** Long-lived values a page stores with {@code session.set}, keyed by the why_sid cookie. */
+    private final SessionStore sessions = new SessionStore();
 
     /** Binds loopback with no development diagnostics. */
     public WhyServer(Site site, int port) throws IOException {
@@ -66,17 +72,29 @@ public final class WhyServer {
 
     public WhyServer(Site site, String host, int port, boolean diagnostics, boolean secureCookies)
             throws IOException {
-        this(site, host, port, diagnostics, secureCookies, REQUEST_TIMEOUT_MILLIS);
+        this(site, host, port, diagnostics, secureCookies, false, REQUEST_TIMEOUT_MILLIS);
+    }
+
+    /** A server that may trust {@code X-Forwarded-Proto: https} from a loopback proxy. */
+    public WhyServer(Site site, String host, int port, boolean diagnostics, boolean secureCookies,
+            boolean trustProxy) throws IOException {
+        this(site, host, port, diagnostics, secureCookies, trustProxy, REQUEST_TIMEOUT_MILLIS);
     }
 
     /** Package-private so tests can exercise the timeout quickly. */
     WhyServer(Site site, String host, int port, boolean diagnostics, boolean secureCookies,
             long requestTimeoutMillis) throws IOException {
+        this(site, host, port, diagnostics, secureCookies, false, requestTimeoutMillis);
+    }
+
+    WhyServer(Site site, String host, int port, boolean diagnostics, boolean secureCookies,
+            boolean trustProxy, long requestTimeoutMillis) throws IOException {
         this.site = site;
         this.compiler = new PageCompiler(site);
         this.server = HttpServer.create(new InetSocketAddress(host, port), 0);
         this.diagnostics = diagnostics;
         this.secureCookies = secureCookies;
+        this.trustProxy = trustProxy;
         this.requestTimeoutMillis = requestTimeoutMillis;
         this.timeouts = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "why-request-timeout");
@@ -269,14 +287,27 @@ public final class WhyServer {
         }
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(requestTimeoutMillis);
         String html;
+        String requestedSession = browserSessionCookie(exchange);
+        String activeSession = requestedSession;
+        Session session = new Session();
         try {
             Program program = compiler.compile(file);
-            Map<String, Object> globals = globals(exchange, flash, csrf, fields);
+            Map<String, Object> globals = globals(exchange, flash, csrf, fields, session);
             globals.put("response", page);
             try (Db db = new Db(site.dbFile())) {
                 globals.put("db", db);
-                html = program.render(globals,
-                        new ExecutionBudget(MAX_INTERPRETER_STEPS, MAX_OUTPUT_CHARS, deadline));
+                if (activeSession != null) session.load(sessions.load(db, activeSession));
+                try {
+                    html = program.render(globals,
+                            new ExecutionBudget(MAX_INTERPRETER_STEPS, MAX_OUTPUT_CHARS, deadline));
+                } finally {
+                    // A page that wrote to the session has it stored before the response leaves,
+                    // including when the write ends in a redirect or a form error.
+                    if (session.changed()) {
+                        activeSession = sessions.save(db, activeSession, session);
+                    }
+                    writeSessionCookie(exchange, requestedSession, activeSession, session);
+                }
             }
             if (html.length() > MAX_OUTPUT_CHARS) {
                 throw new WhyError("output budget exceeded", display, 0);
@@ -343,7 +374,7 @@ public final class WhyServer {
         if (!csrf.shouldSetCookie()) return;
         StringBuilder cookie = new StringBuilder("why_csrf=").append(csrf.token())
                 .append("; Path=/; HttpOnly; SameSite=Lax");
-        if (secureCookies || exchange instanceof HttpsExchange) cookie.append("; Secure");
+        if (secureCookie(exchange)) cookie.append("; Secure");
         exchange.getResponseHeaders().add("Set-Cookie", cookie.toString());
     }
 
@@ -363,8 +394,57 @@ public final class WhyServer {
     private void setSessionCookie(HttpExchange exchange, String id) {
         StringBuilder cookie = new StringBuilder("why_session=").append(id)
                 .append("; Path=/; HttpOnly; SameSite=Lax");
-        if (secureCookies || exchange instanceof HttpsExchange) cookie.append("; Secure");
+        if (secureCookie(exchange)) cookie.append("; Secure");
         exchange.getResponseHeaders().add("Set-Cookie", cookie.toString());
+    }
+
+    /** The why_sid cookie value; it is accepted only in the shape this server mints. */
+    private static String browserSessionCookie(HttpExchange exchange) {
+        String id = cookie(exchange, "why_sid");
+        return id != null && id.matches("[A-Za-z0-9_-]{1,64}") ? id : null;
+    }
+
+    /**
+     * Issues the session cookie the first time a page stores something, re-issues it with a fresh
+     * lifetime while the session lives, and expires it once the page clears the session (sign out).
+     */
+    private void writeSessionCookie(HttpExchange exchange, String requested, String active,
+            Session session) {
+        String cookie;
+        if (session.isEmpty()) {
+            // A page that never touched the session keeps it, so a 500 cannot sign a visitor out.
+            if (requested == null || !session.changed()) return;
+            cookie = "why_sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+        } else {
+            if (active == null) return;
+            // The store keeps a session for 30 idle days and restarts that clock on every page,
+            // so the cookie is re-issued on every page too: one left at its first expiry would
+            // sign out a visitor who never stopped browsing.
+            cookie = "why_sid=" + active + "; Path=/; HttpOnly; SameSite=Lax; Max-Age="
+                    + SessionStore.TTL_SECONDS;
+        }
+        if (secureCookie(exchange)) cookie += "; Secure";
+        exchange.getResponseHeaders().add("Set-Cookie", cookie);
+    }
+
+    /**
+     * Whether a cookie must be marked Secure: always behind TLS, otherwise only when a loopback
+     * proxy says the original request was HTTPS and the operator opted into trusting it.
+     */
+    private boolean secureCookie(HttpExchange exchange) {
+        if (secureCookies || exchange instanceof HttpsExchange) return true;
+        if (!trustProxy || !isLoopback(exchange)) return false;
+        String forwarded = exchange.getRequestHeaders().getFirst("X-Forwarded-Proto");
+        if (forwarded == null) return false;
+        int comma = forwarded.indexOf(',');
+        String proto = (comma < 0 ? forwarded : forwarded.substring(0, comma)).strip();
+        return proto.equalsIgnoreCase("https");
+    }
+
+    private static boolean isLoopback(HttpExchange exchange) {
+        InetSocketAddress remote = exchange.getRemoteAddress();
+        InetAddress address = remote == null ? null : remote.getAddress();
+        return address != null && address.isLoopbackAddress();
     }
 
     private int serveStatic(HttpExchange exchange, Path file) throws IOException {
@@ -393,7 +473,7 @@ public final class WhyServer {
     }
 
     private Map<String, Object> globals(HttpExchange exchange, Flash flash, Csrf csrf,
-            Map<Object, Object> form) {
+            Map<Object, Object> form, Session session) {
         Map<Object, Object> params = new LinkedHashMap<>();
         String rawQuery = exchange.getRequestURI().getRawQuery();
         if (rawQuery != null && !rawQuery.isEmpty()) parseUrlEncoded(rawQuery, params);
@@ -404,6 +484,7 @@ public final class WhyServer {
         request.put("query", rawQuery == null ? "" : rawQuery);
         request.put("params", params);
         request.put("form", form);
+        request.put("remote", remoteAddress(exchange));
 
         Map<String, Object> globals = new LinkedHashMap<>();
         globals.put("request", request);
@@ -411,7 +492,56 @@ public final class WhyServer {
         globals.put("form", form);
         globals.put("flash", flash);
         globals.put("csrf", csrf);
+        globals.put("session", session);
         return globals;
+    }
+
+    /** The caller's IP, honouring --trust-proxy, for pages that throttle or audit by client. */
+    private String remoteAddress(HttpExchange exchange) {
+        InetSocketAddress remote = exchange.getRemoteAddress();
+        InetAddress peer = remote == null ? null : remote.getAddress();
+        return clientAddress(peer, exchange.getRequestHeaders().get("X-Forwarded-For"), trustProxy);
+    }
+
+    /**
+     * The address a page should see. Without {@code --trust-proxy}, or from a peer that is not the
+     * loopback proxy, it is the socket peer. When trusted, the chain is read from the right: the
+     * proxy appends the address it saw, so the last hop that is not itself a loopback proxy is the
+     * closest trusted answer, and a prefix the client supplied cannot spoof a per-IP limit.
+     */
+    static String clientAddress(InetAddress peer, List<String> forwardedFor, boolean trustProxy) {
+        String direct = peer == null ? "" : peer.getHostAddress();
+        if (!trustProxy || peer == null || !peer.isLoopbackAddress() || forwardedFor == null) {
+            return direct;
+        }
+        for (int header = forwardedFor.size() - 1; header >= 0; header--) {
+            String value = forwardedFor.get(header);
+            if (value == null) continue;
+            String[] hops = value.split(",");
+            for (int hop = hops.length - 1; hop >= 0; hop--) {
+                InetAddress address = literal(hops[hop].strip());
+                if (address == null || address.isLoopbackAddress()) continue;
+                return address.getHostAddress();
+            }
+        }
+        return direct;
+    }
+
+    /** An IP literal, or null; names are rejected so a forwarded header cannot cause a lookup. */
+    private static InetAddress literal(String value) {
+        String text = value;
+        if (text.startsWith("[") && text.endsWith("]")) {
+            text = text.substring(1, text.length() - 1);
+        }
+        if (text.isEmpty() || text.length() > 64) return null;
+        boolean ipv4 = text.matches("\\d{1,3}(\\.\\d{1,3}){3}");
+        boolean ipv6 = text.indexOf(':') >= 0 && text.matches("[0-9A-Fa-f:.]+");
+        if (!ipv4 && !ipv6) return null;
+        try {
+            return InetAddress.getByName(text);
+        } catch (UnknownHostException e) {
+            return null;
+        }
     }
 
     /** POSTed urlencoded fields; empty on GET or other content types. */
@@ -493,7 +623,7 @@ public final class WhyServer {
 
     private void sendRedirect(HttpExchange exchange, String location) throws IOException {
         if (!Redirect.isSameOriginPath(location)) {
-            throw new WhyError("redirect must be a same-origin path", null, 0);
+            throw new WhyError("redirect needs a single-slash local path starting with '/'", null, 0);
         }
         exchange.getResponseHeaders().set("Location", location);
         exchange.getResponseHeaders().set("Cache-Control", "no-store");

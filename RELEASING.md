@@ -7,8 +7,8 @@ Publishing is local-only. One upload contains three coordinates:
 - `io.github.slayyyyer.why:io.github.slayyyyer.why.gradle.plugin` (the plugin marker)
 
 Nmcp aggregates them, so the runtime, the plugin, the marker, sources, Javadoc and their signatures
-are validated together. The version is `0.1.0` in `build.gradle.kts`,
-`why-gradle-plugin/build.gradle.kts` and `pom.xml`; bump all three before a release.
+are validated together. The version is `whyVersion` in `gradle.properties`; the plugin reads it from
+the `why-version.properties` resource, so bump it in that one place before a release.
 
 ## One-time setup
 
@@ -27,7 +27,7 @@ neither to disk.
 
 ```bash
 ./gradlew :why-gradle-plugin:test
-mvn verify
+./gradlew build
 ./publish-central.sh --dry-run   # optional: build and sign, upload nothing
 ./publish-central.sh
 ```
@@ -47,7 +47,7 @@ release; the deployment status endpoint can lag or answer `500` while it settles
 artifacts themselves:
 
 ```bash
-curl -fI https://repo1.maven.org/maven2/io/github/slayyyyer/why-lang/0.1.0/why-lang-0.1.0.pom
+curl -fI https://repo1.maven.org/maven2/io/github/slayyyyer/why-lang/0.2.0/why-lang-0.2.0.pom
 ```
 
 ## Publishing the plugin to the Gradle Plugin Portal
