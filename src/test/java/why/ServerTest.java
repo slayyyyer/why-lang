@@ -120,6 +120,12 @@ class ServerTest {
     }
 
     @Test
+    void theRequestCarriesTheClientAddress() throws Exception {
+        write("remote.why", "view:\n{{request.remote}}\n");
+        assertEquals("127.0.0.1", get("/remote").body().strip());
+    }
+
+    @Test
     void formPostsWithoutATokenAreRejected() throws Exception {
         write("sign.why", "controller:\nname = form.name\n\nview:\n{{name}}\n");
         assertEquals(403, post("/sign", "name=why").statusCode());

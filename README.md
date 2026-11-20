@@ -53,17 +53,18 @@ reports unresolved imports and partials, duplicate `def`s, undefined function ca
 collisions, then prints a page map. It exits 1 when it finds anything and does not touch the
 database.
 
-## Without Gradle
+## Without a project
 
-A folder of pages needs no project. `why new` writes a starter site and `bin/why` runs the CLI jar:
+A folder of pages needs no Gradle project. `why new` writes a starter site and `bin/why` runs the
+CLI jar:
 
 ```bash
-mvn package
+./gradlew shadowJar
 ./bin/why new mysite
 ./bin/why mysite
 ```
 
-`bin/why` uses `target/why.jar` unless `WHY_JAR` points at another copy; `bin/why.cmd` is the
+`bin/why` uses `build/libs/why.jar` unless `WHY_JAR` points at another copy; `bin/why.cmd` is the
 Windows launcher. `why new` writes pages, a stylesheet and a `schema.sql`, and refuses a folder that
 is not empty.
 
@@ -128,15 +129,14 @@ try (TestServer server = TestServer.start(Path.of("src/why"))) {
 
 ## From source
 
-The repository carries both a Maven build for the shaded CLI jar and a Gradle build for the library
-and plugin. To work on Why itself:
+One Gradle build produces the library, the plugin and the shaded CLI jar. To work on Why itself:
 
 ```bash
-mvn package
-java -jar target/why.jar ./site
+./gradlew shadowJar
+java -jar build/libs/why.jar ./site
 ```
 
-`java -jar target/why.jar check ./site` parses and checks the site without serving it. The CLI
+`java -jar build/libs/why.jar check ./site` parses and checks the site without serving it. The CLI
 accepts `--port`, `--host`, `--db`, `--dev` and `--secure-cookies`; the plugin exposes the same
 settings through the `why` extension.
 
@@ -172,13 +172,13 @@ cd docs
 jwebserver -p 4000
 ```
 
-This working copy has no system-wide Java or Maven, so it carries a portable toolchain in the
-gitignored `.tools/` folder. The same build from this folder:
+This working copy has no system-wide Java, so it carries a portable JDK in the gitignored `.tools/`
+folder; the Gradle wrapper supplies the build tool. The same build from this folder:
 
 ```bash
 export JAVA_HOME="$PWD/.tools/jdk"; export PATH="$JAVA_HOME/bin:$PATH"
-.tools/mvn/bin/mvn package
-.tools/jdk/bin/java -jar target/why.jar ./site --port 3000
+./gradlew shadowJar
+.tools/jdk/bin/java -jar build/libs/why.jar ./site --port 3000
 ```
 
 Status: **a proof of concept**. The page format, controller language, views, SQLite access, forms,
@@ -207,7 +207,7 @@ See [SECURITY.md](SECURITY.md) for the full security policy and deployment check
 
 ## M0 — the shell
 
-- Java 21, Maven, one runnable `target/why.jar` (SQLite JDBC shaded in).
+- Java 21, the Gradle wrapper, one runnable `build/libs/why.jar` (SQLite JDBC shaded in).
 - `com.sun.net.httpserver.HttpServer` with a virtual-thread executor.
 - Every `.why` file under the site folder is served at its path: `/` is `index.why`,
   `/posts/archive` is `posts/archive.why`, and `/about` also finds `about.why`. Files whose name
@@ -337,7 +337,8 @@ end
 ```
 
 Only `nil` and `false` are falsy (Ruby rules: `0` and `""` are truthy). Undefined names read as
-`nil`. `+` with a string on either side concatenates.
+`nil`. `+` with a string on either side concatenates. Strings are indexed by character:
+`"why"[0]` is `"w"`, `"why"[-1]` is `"y"`, and an index past either end is `nil`.
 
 Built-in methods:
 
@@ -347,7 +348,8 @@ Built-in methods:
   `each`/`map`/`select` with a block
 - Hashes: `keys`, `values`, `length`/`size`, `has_key?`, `each` with a block
 - Numbers: `to_i`, `to_f`, `abs`, `round`
-- Functions: `str(x)`, `int(x)`, `float(x)`, `redirect(path)`, `validate(form, rules)`
+- Functions: `str(x)`, `int(x)`, `float(x)`, `redirect(path)`, `validate(form, rules)`,
+  `pbkdf2(password, salt, iterations)`
 
 ## Views
 
@@ -401,7 +403,8 @@ added to a database created by `schema.sql` should therefore be written against 
 - `params` — query parameters as strings, e.g. `/post?id=3` gives `params.id == "3"`.
 - `form` — POSTed form fields as strings, empty on GET. Only `application/x-www-form-urlencoded`
   bodies are read (64 KiB cap).
-- `request` — a hash with `method`, `path`, `query`, `params` and `form`.
+- `request` — a hash with `method`, `path`, `query`, `params`, `form` and `remote` (the caller's IP
+  address, for throttling or auditing).
 - `flash` — one-shot messages. `flash.set("notice", "…")` stores a value for the next page
   request, where `{{flash.notice}}` can read it; the request after that no longer has it. Messages
   live in a bounded, expiring in-memory store keyed by a server-issued `why_session` cookie;
@@ -409,6 +412,38 @@ added to a database created by `schema.sql` should therefore be written against 
 - `csrf` — `csrf.token`, a per-browser secret for form posts. It rides an HttpOnly `why_csrf`
   cookie, so it survives a restart and needs no server-side state. A POST without the matching
   `_token` field is rejected with 403.
+- `session` — long-lived values for this browser; see [Sessions](#sessions).
+
+## Sessions
+
+`session` keeps small values for one browser across requests and server restarts. They live in the
+site database (`why_sessions`) and are named by the HttpOnly `why_sid` cookie.
+
+```ruby
+session.set("user_id", user.id)   # stored as a string
+me = session.get("user_id")
+session.set("notice", nil)        # nil removes the name
+session.clear()                   # sign out
+session.rotate()                  # new ID after sign-in
+```
+
+The cookie lasts 30 idle days; every page that loads a live session slides that window. Expired
+rows are pruned when a session is written. Call `session.rotate()` after setting the signed-in
+user so a session ID issued before login cannot be replayed. A session holds at most 32 names,
+64-character names and 4096-character values. Any site that signs anyone in wants this.
+
+## Passwords
+
+`pbkdf2(password, salt, iterations)` derives a 32-byte PBKDF2-HMAC-SHA256 key and returns it as
+lowercase hex. The iteration count must be 10,000 to 1,000,000. Store the parameters with the key
+so the cost can be raised later without invalidating rows:
+
+```
+pbkdf2-sha256$120000$<salt>$<key>
+```
+
+Compare with `pbkdf2(password, salt, rounds) == stored_key`; generate a fresh random salt per
+account and never store the password itself.
 
 ## Responses
 
@@ -459,7 +494,7 @@ rejected with 403 before the page runs.
 ## Project layout
 
 ```
-pom.xml, build.gradle.kts, settings.gradle.kts, gradlew
+build.gradle.kts, settings.gradle.kts, gradlew
 site/                      demo site: pages, partials, CSS, schema.sql
 docs/                      project site, published to GitHub Pages
 why-gradle-plugin/         the `io.github.slayyyyer.why` plugin and its TestKit tests

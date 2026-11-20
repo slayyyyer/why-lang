@@ -17,7 +17,7 @@ import why.util.Suggest;
 public final class Interpreter {
 
     /** Free functions that exist without a {@code def}; kept here so tools can share the list. */
-    public static final List<String> BUILTINS = List.of("str", "int", "float", "redirect", "validate");
+    public static final List<String> BUILTINS = List.of("str", "int", "float", "redirect", "validate", "pbkdf2");
 
     private static final Object NEXT = new Object();
     private static final Object BREAK = new Object();
@@ -210,6 +210,7 @@ public final class Interpreter {
             case "float" -> Value.toDouble(arg);
             case "redirect" -> throw new Redirect(redirectTarget(arg, line));
             case "validate" -> validate(args, line);
+            case "pbkdf2" -> pbkdf2(args, line);
             default -> throw new WhyError(
                     "undefined function '" + name + "'" + suggestFunction(name), null, line);
         };
@@ -249,6 +250,14 @@ public final class Interpreter {
             }
         }
         return errors;
+    }
+
+    /** {@code pbkdf2(password, salt, iterations)} returns the derived key as lowercase hex. */
+    private static String pbkdf2(List<Object> args, int line) {
+        if (args.size() < 3) {
+            throw new WhyError("pbkdf2 needs a password, a salt and an iteration count", null, line);
+        }
+        return Passwords.pbkdf2(Value.str(args.get(0)), Value.str(args.get(1)), Value.toLong(args.get(2)));
     }
 
     private static int ruleNumber(String rule, int line) {
@@ -309,6 +318,26 @@ public final class Interpreter {
                 }
                 case "get" -> flash.get(Value.str(first));
                 default -> throw new WhyError("flash has no method '" + name + "' (try set or get)", null, line);
+            };
+        }
+
+        if (receiver instanceof Session session) {
+            return switch (name) {
+                case "get" -> session.get(Value.str(first));
+                case "set" -> {
+                    session.set(Value.str(first), args.size() > 1 ? args.get(1) : null);
+                    yield null;
+                }
+                case "clear" -> {
+                    session.clear();
+                    yield null;
+                }
+                case "rotate" -> {
+                    session.rotate();
+                    yield null;
+                }
+                default -> throw new WhyError(
+                        "session has no method '" + name + "' (try get, set, clear or rotate)", null, line);
             };
         }
 
@@ -467,6 +496,12 @@ public final class Interpreter {
     }
 
     private Object index(Object target, Object key, int line) {
+        if (target instanceof String text) {
+            long at = Value.toLong(key);
+            if (at < 0) at += text.length();
+            if (at < 0 || at >= text.length()) return null;
+            return String.valueOf(text.charAt((int) at));
+        }
         if (target instanceof List<?> raw) {
             @SuppressWarnings("unchecked")
             List<Object> list = (List<Object>) raw;

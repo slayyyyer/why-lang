@@ -34,6 +34,7 @@
         <a href="#language">The language</a>
         <a href="#views">Views</a>
         <a href="#request">Request globals</a>
+        <a href="#sessions">Sessions and passwords</a>
         <a href="#database">The database</a>
         <a href="#responses">Responses and flash</a>
         <a href="#forms">Forms</a>
@@ -142,10 +143,11 @@ end</code></pre></div>
               <tr><td>Lists</td><td><code>length</code>, <code>size</code>, <code>first</code>, <code>last</code>, <code>push</code>, <code>append</code>, <code>join</code>, <code>include?</code>, <code>reverse</code>, <code>sum</code>, <code>each</code>, <code>map</code>, <code>select</code> (the last three with a block)</td></tr>
               <tr><td>Hashes</td><td><code>keys</code>, <code>values</code>, <code>length</code>, <code>size</code>, <code>has_key?</code>, <code>each</code> (with a block)</td></tr>
               <tr><td>Numbers</td><td><code>to_i</code>, <code>to_f</code>, <code>abs</code>, <code>round</code></td></tr>
-              <tr><td>Functions</td><td><code>str(x)</code>, <code>int(x)</code>, <code>float(x)</code>, <code>redirect(path)</code></td></tr>
+              <tr><td>Functions</td><td><code>str(x)</code>, <code>int(x)</code>, <code>float(x)</code>, <code>redirect(path)</code>, <code>pbkdf2(password, salt, iterations)</code></td></tr>
             </tbody>
           </table>
         </div>
+        <p>Strings are indexed by character: <code>"why"[0]</code> is <code>"w"</code>, <code>"why"[-1]</code> is <code>"y"</code>, and an index past either end is <code>nil</code>.</p>
 
         <h2 id="views">Views</h2>
         <p>Mustaches hold real controller expressions. Output is escaped by default.</p>
@@ -179,11 +181,22 @@ end</code></pre></div>
               <tr><td><code>request</code></td><td>A hash with <code>method</code>, <code>path</code>, <code>query</code>, <code>params</code> and <code>form</code>.</td></tr>
               <tr><td><code>flash</code></td><td>One-shot messages carried to the next page request. <code>flash.set("notice", "…")</code>; read with <code>{{flash.notice}}</code> or <code>flash.get("notice")</code>.</td></tr>
               <tr><td><code>csrf</code></td><td><code>csrf.token</code>, a per-browser secret for form posts. It rides an HttpOnly <code>why_csrf</code> cookie, so it survives a restart and needs no server-side state. A POST without the matching <code>_token</code> field is rejected with 403.</td></tr>
+              <tr><td><code>session</code></td><td>Small server-side values for this browser, stored in <code>why_sessions</code> and named by the HttpOnly <code>why_sid</code> cookie. <code>session.get</code>, <code>session.set</code>, <code>session.clear</code> and <code>session.rotate</code>; see below.</td></tr>
               <tr><td><code>response</code></td><td>Response controls: <code>response.status(201)</code>, <code>response.header("X-Why", "…")</code>, <code>response.json(hash)</code> and <code>response.csp("…")</code>.</td></tr>
             </tbody>
           </table>
         </div>
         <p>A page that writes branches on <code>request.method == "POST"</code>. There is no separate POST-only page.</p>
+
+        <h2 id="sessions">Sessions and passwords</h2>
+        <p><code>session</code> keeps small values for one browser across requests and server restarts. They live in the site database (<code>why_sessions</code>) and are named by the HttpOnly <code>why_sid</code> cookie.</p>
+        <div class="code"><div class="code-title">controller</div><pre><code>session.set("user_id", user.id)   # stored as a string
+me = session.get("user_id")
+session.set("notice", nil)        # nil removes the name
+session.clear()                   # sign out
+session.rotate()                  # new ID after sign-in</code></pre></div>
+        <p>The cookie lasts 30 idle days; every page that loads a live session slides that window, and expired rows are pruned when a session is written. A session holds at most 32 names, 64-character names and 4096-character values. Call <code>session.rotate()</code> after setting the signed-in user so a session ID issued before login cannot be replayed. Any site that signs anyone in wants this.</p>
+        <p><code>pbkdf2(password, salt, iterations)</code> derives a 32-byte PBKDF2-HMAC-SHA256 key and returns lowercase hex. The iteration count must be 10,000 to 1,000,000. Store the parameters with the key, as <code>pbkdf2-sha256$120000$&lt;salt&gt;$&lt;key&gt;</code>, so the cost can be raised later. Compare with <code>pbkdf2(password, salt, rounds) == stored_key</code>, use a fresh random salt per account, and never store the password itself.</p>
 
         <h2 id="database">The database</h2>
         <p>Every page request gets a SQLite connection through the <code>db</code> global. Arguments are bound as prepared-statement parameters.</p>
@@ -257,22 +270,22 @@ end
 ./gradlew whyCheck</code></pre></div>
         <p>Anything else — a different host, a database outside the project, diagnostics — is a <code>why</code> extension property. The flags below are what <code>whyRun</code> and <code>whyCheck</code> pass to the same CLI:</p>
         <div class="code"><div class="code-title">terminal</div><pre><code># the CLI directly, from a checkout or a shaded jar
-java -jar target/why.jar ./site
+java -jar build/libs/why.jar ./site
 
 # choose a port and database file outside the site folder
-java -jar target/why.jar ./site --port 3000 --db ./data.db
+java -jar build/libs/why.jar ./site --port 3000 --db ./data.db
 
 # show source, SQL errors and stack traces while developing
-java -jar target/why.jar ./site --dev
+java -jar build/libs/why.jar ./site --dev
 
 # accept connections from another machine (default binds 127.0.0.1)
-java -jar target/why.jar ./site --host 0.0.0.0
+java -jar build/libs/why.jar ./site --host 0.0.0.0
 
 # behind TLS, mark session cookies Secure
-java -jar target/why.jar ./site --secure-cookies
+java -jar build/libs/why.jar ./site --secure-cookies
 
 # parse and check every page without serving it
-java -jar target/why.jar check ./site</code></pre></div>
+java -jar build/libs/why.jar check ./site</code></pre></div>
         <p><code>check</code> reports unresolved imports and partials, duplicate defs, undefined function calls and URL collisions, then prints a page map. It exits 1 when it finds anything and never touches the database.</p>
         <div class="code"><div class="code-title">why check</div><pre><code>checking 3 pages in /srv/why/site
 

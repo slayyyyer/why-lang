@@ -7,6 +7,7 @@ import com.sun.net.httpserver.HttpsExchange;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -32,6 +33,7 @@ import why.lang.ExecutionBudget;
 import why.lang.Flash;
 import why.lang.Redirect;
 import why.lang.Response;
+import why.lang.Session;
 import why.util.Html;
 
 /** The HTTP server: one handler, virtual threads, every request compiled and rendered from disk. */
@@ -58,6 +60,8 @@ public final class WhyServer {
     private final ScheduledExecutorService timeouts;
     /** Bounded, expiring one-shot flashes keyed by server-issued session IDs. */
     private final FlashStore flashes = new FlashStore();
+    /** Long-lived values a page stores with {@code session.set}, keyed by the why_sid cookie. */
+    private final SessionStore sessions = new SessionStore();
 
     /** Binds loopback with no development diagnostics. */
     public WhyServer(Site site, int port) throws IOException {
@@ -269,14 +273,27 @@ public final class WhyServer {
         }
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(requestTimeoutMillis);
         String html;
+        String requestedSession = browserSessionCookie(exchange);
+        String activeSession = requestedSession;
+        Session session = new Session();
         try {
             Program program = compiler.compile(file);
-            Map<String, Object> globals = globals(exchange, flash, csrf, fields);
+            Map<String, Object> globals = globals(exchange, flash, csrf, fields, session);
             globals.put("response", page);
             try (Db db = new Db(site.dbFile())) {
                 globals.put("db", db);
-                html = program.render(globals,
-                        new ExecutionBudget(MAX_INTERPRETER_STEPS, MAX_OUTPUT_CHARS, deadline));
+                if (activeSession != null) session.load(sessions.load(db, activeSession));
+                try {
+                    html = program.render(globals,
+                            new ExecutionBudget(MAX_INTERPRETER_STEPS, MAX_OUTPUT_CHARS, deadline));
+                } finally {
+                    // A page that wrote to the session has it stored before the response leaves,
+                    // including when the write ends in a redirect or a form error.
+                    if (session.changed()) {
+                        activeSession = sessions.save(db, activeSession, session);
+                    }
+                    writeSessionCookie(exchange, requestedSession, activeSession, session);
+                }
             }
             if (html.length() > MAX_OUTPUT_CHARS) {
                 throw new WhyError("output budget exceeded", display, 0);
@@ -367,6 +384,35 @@ public final class WhyServer {
         exchange.getResponseHeaders().add("Set-Cookie", cookie.toString());
     }
 
+    /** The why_sid cookie value; it is accepted only in the shape this server mints. */
+    private static String browserSessionCookie(HttpExchange exchange) {
+        String id = cookie(exchange, "why_sid");
+        return id != null && id.matches("[A-Za-z0-9_-]{1,64}") ? id : null;
+    }
+
+    /**
+     * Issues the session cookie the first time a page stores something, re-issues it with a fresh
+     * lifetime while the session lives, and expires it once the page clears the session (sign out).
+     */
+    private void writeSessionCookie(HttpExchange exchange, String requested, String active,
+            Session session) {
+        String cookie;
+        if (session.isEmpty()) {
+            // A page that never touched the session keeps it, so a 500 cannot sign a visitor out.
+            if (requested == null || !session.changed()) return;
+            cookie = "why_sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+        } else {
+            if (active == null) return;
+            // The store keeps a session for 30 idle days and restarts that clock on every page,
+            // so the cookie is re-issued on every page too: one left at its first expiry would
+            // sign out a visitor who never stopped browsing.
+            cookie = "why_sid=" + active + "; Path=/; HttpOnly; SameSite=Lax; Max-Age="
+                    + SessionStore.TTL_SECONDS;
+        }
+        if (secureCookies || exchange instanceof HttpsExchange) cookie += "; Secure";
+        exchange.getResponseHeaders().add("Set-Cookie", cookie);
+    }
+
     private int serveStatic(HttpExchange exchange, Path file) throws IOException {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
         long size = Files.size(file);
@@ -393,7 +439,7 @@ public final class WhyServer {
     }
 
     private Map<String, Object> globals(HttpExchange exchange, Flash flash, Csrf csrf,
-            Map<Object, Object> form) {
+            Map<Object, Object> form, Session session) {
         Map<Object, Object> params = new LinkedHashMap<>();
         String rawQuery = exchange.getRequestURI().getRawQuery();
         if (rawQuery != null && !rawQuery.isEmpty()) parseUrlEncoded(rawQuery, params);
@@ -404,6 +450,7 @@ public final class WhyServer {
         request.put("query", rawQuery == null ? "" : rawQuery);
         request.put("params", params);
         request.put("form", form);
+        request.put("remote", remoteAddress(exchange));
 
         Map<String, Object> globals = new LinkedHashMap<>();
         globals.put("request", request);
@@ -411,7 +458,15 @@ public final class WhyServer {
         globals.put("form", form);
         globals.put("flash", flash);
         globals.put("csrf", csrf);
+        globals.put("session", session);
         return globals;
+    }
+
+    /** The caller's IP address as text, for pages that throttle or audit by client. */
+    private static String remoteAddress(HttpExchange exchange) {
+        InetSocketAddress remote = exchange.getRemoteAddress();
+        InetAddress address = remote == null ? null : remote.getAddress();
+        return address == null ? "" : address.getHostAddress();
     }
 
     /** POSTed urlencoded fields; empty on GET or other content types. */
