@@ -48,6 +48,7 @@ class WhyxAppTest {
         Assumptions.assumeTrue(Files.isDirectory(app), "whyx pages not found at " + app);
         copySite(app);
         Migrations.apply(dir, dir.resolve("data.db"));
+        Seeds.apply(dir, dir.resolve("data.db"), true, true);
         server = TestServer.start(dir);
         // A page fetched without a CSRF cookie issues one. Its value is both the cookie and the
         // form token, so every later request can send it back.
@@ -131,7 +132,7 @@ class WhyxAppTest {
                 "dave is not followed, so his post does not belong on alice's home");
     }
 
-    /** Copies the site's pages, stylesheet and migrations, leaving the demo database behind. */
+    /** Copies the pages, stylesheet, migrations and dev seed, leaving the demo database behind. */
     private void copySite(Path app) throws IOException {
         try (Stream<Path> pages = Files.list(app)) {
             for (Path page : pages.toList()) {
@@ -140,6 +141,10 @@ class WhyxAppTest {
                     Files.copy(page, dir.resolve(name), StandardCopyOption.REPLACE_EXISTING);
                 }
             }
+        }
+        if (Files.isRegularFile(app.resolve(Seeds.FILE))) {
+            Files.copy(app.resolve(Seeds.FILE), dir.resolve(Seeds.FILE),
+                    StandardCopyOption.REPLACE_EXISTING);
         }
         Path migrations = Files.createDirectories(dir.resolve(Migrations.DIRECTORY));
         try (Stream<Path> files = Files.list(app.resolve(Migrations.DIRECTORY))) {

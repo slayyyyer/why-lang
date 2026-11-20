@@ -211,6 +211,7 @@ db.query("select * from posts where id = ? and user_id = :who", id, who: uid)</c
 db.exec("delete from " + table + " where user_id = ?", uid)</code></pre></div>
         <p>Rows are hashes keyed by column label, so <code>{{it.title}}</code> and <code>post.title</code> work. A query is capped at 10,000 rows and 4 MiB of column labels and values; a larger result raises a page error instead of loading without bound. If <code>data.db</code> does not exist and <code>schema.sql</code> exists, the script runs once.</p>
         <p>A <code>migrations/</code> folder takes over the schema: every <code>.sql</code> file in it applies once, in filename order, each in its own transaction, recorded in a <code>schema_migrations</code> table. A fresh database runs them in order; an existing one applies only what is pending, so schema changes upgrade in place.</p>
+        <p><code>seed.sql</code> is demo data, not schema. With <code>--dev</code> it runs once after the migrations, and only when the database file did not exist before that boot. A deployed site with a persistent disk never re-inserts rows; an ephemeral host that starts empty still gets its demo users. Write the seed with <code>insert or ignore</code> so applying it by hand is safe too.</p>
 
         <h2 id="responses">Responses and flash</h2>
         <p><code>redirect("/path")</code> stops the page and answers <code>303 See Other</code>. The target must be a single-slash local path; absolute URLs, protocol-relative locations, backslash variants and whitespace are rejected. <code>redirect_back("/")</code> uses the posted <code>back</code> field when it is such a path and the fallback otherwise.</p>
@@ -291,8 +292,12 @@ java -jar build/libs/why.jar ./site --host 0.0.0.0
 # behind TLS, mark session cookies Secure
 java -jar build/libs/why.jar ./site --secure-cookies
 
+# behind a loopback TLS proxy, trust its X-Forwarded-Proto: https
+java -jar build/libs/why.jar ./site --trust-proxy
+
 # parse and check every page without serving it
 java -jar build/libs/why.jar check ./site</code></pre></div>
+        <p><code>PORT</code>, <code>HOST</code>, <code>WHY_DB</code> and <code>WHY_SECURE_COOKIES</code> supply the defaults for <code>--port</code>, <code>--host</code>, <code>--db</code> and <code>--secure-cookies</code>, so a container does not need a shell wrapper. <code>--trust-proxy</code> marks cookies <code>Secure</code> when a loopback proxy forwards <code>X-Forwarded-Proto: https</code>; the header is ignored from any other peer.</p>
         <p><code>check</code> reports unresolved imports and partials, duplicate defs, undefined function calls and URL collisions, then prints a page map. It exits 1 when it finds anything and never touches the database.</p>
         <div class="code"><div class="code-title">why check</div><pre><code>checking 3 pages in /srv/why/site
 

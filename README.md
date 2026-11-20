@@ -137,8 +137,11 @@ java -jar build/libs/why.jar ./site
 ```
 
 `java -jar build/libs/why.jar check ./site` parses and checks the site without serving it. The CLI
-accepts `--port`, `--host`, `--db`, `--dev` and `--secure-cookies`; the plugin exposes the same
-settings through the `why` extension.
+accepts `--port`, `--host`, `--db`, `--dev`, `--secure-cookies` and `--trust-proxy`; the plugin
+exposes the same settings through the `why` extension. `PORT`, `HOST`, `WHY_DB` and
+`WHY_SECURE_COOKIES` supply the defaults for the first four, so a container needs no shell wrapper.
+`--trust-proxy` marks cookies `Secure` when a loopback proxy forwards `X-Forwarded-Proto: https`;
+the header is ignored from any other peer.
 
 To try a local build of the plugin against a consumer project, run
 `./gradlew publishToMavenLocal :why-gradle-plugin:publishToMavenLocal` and put `mavenLocal()` ahead
@@ -194,7 +197,8 @@ untrusted code on the server.
 
 For an exposed deployment:
 
-- terminate TLS in a reverse proxy and use `--secure-cookies`; do not expose the plain HTTP listener
+- terminate TLS in a reverse proxy and use `--secure-cookies` (or `--trust-proxy` when the proxy is
+  loopback and forwards `X-Forwarded-Proto: https`); do not expose the plain HTTP listener
 - run Why as a dedicated, non-root service account with least-privilege filesystem permissions
 - keep the SQLite database outside the web root, using an explicit `--db` path
 - keep regular, protected backups outside the web root and test restoring them
@@ -222,8 +226,9 @@ See [SECURITY.md](SECURITY.md) for the full security policy and deployment check
 - Hard per-request limits: 64 KiB bodies, 16 KiB/100 headers, 32 concurrent requests, a 10-second
   timeout, 100k interpreter steps, 1M rendered characters, 10k/4 MiB database results, 4 MiB static
   assets, 4 KiB flash values and 256 KiB pages/imports.
-- `java -jar why.jar [site] [--host HOST] [--port N] [--db FILE] [--dev] [--secure-cookies]`;
-  `java -jar why.jar check [site]` parses and checks the whole site without serving it.
+- `java -jar why.jar [site] [--host HOST] [--port N] [--db FILE] [--dev] [--secure-cookies]
+  [--trust-proxy]`; `java -jar why.jar check [site]` parses and checks the whole site without
+  serving it.
 
 ## M1 — the language and views
 
@@ -414,6 +419,11 @@ in filename order, each in its own transaction, recorded in a `schema_migrations
 database runs them in order; an existing one applies only what is pending. The first migration
 added to a database created by `schema.sql` should therefore be written against that schema with
 `create table if not exists`, or the baseline row inserted into `schema_migrations`.
+
+`seed.sql` is demo data, not schema. With `--dev` it runs once after the migrations, and only when
+the database file did not exist before that boot. A deployed site with a persistent disk never
+re-inserts rows; an ephemeral host that starts empty still gets its demo users. Write the seed with
+`insert or ignore` so applying it by hand is safe too.
 
 ## Request globals
 

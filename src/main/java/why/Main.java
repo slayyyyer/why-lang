@@ -22,11 +22,12 @@ public final class Main {
         }
 
         Path directory = Path.of(".");
-        String host = "127.0.0.1";
-        int port = 8080;
-        Path db = null;
+        String host = env("HOST", "127.0.0.1");
+        int port = envPort(8080);
+        Path db = envDb();
         boolean diagnostics = false;
-        boolean secureCookies = false;
+        boolean secureCookies = envFlag("WHY_SECURE_COOKIES");
+        boolean trustProxy = false;
         boolean check = args.length > 0 && args[0].equals("check");
 
         for (int i = check ? 1 : 0; i < args.length; i++) {
@@ -77,6 +78,13 @@ public final class Main {
                     }
                     secureCookies = true;
                 }
+                case "--trust-proxy" -> {
+                    if (check) {
+                        fail("check does not take " + arg);
+                        return;
+                    }
+                    trustProxy = true;
+                }
                 default -> {
                     if (arg.startsWith("-")) {
                         fail("unknown option '" + arg + "'");
@@ -100,6 +108,7 @@ public final class Main {
         }
 
         Path dbFile = db == null ? root.resolve("data.db") : db.toAbsolutePath().normalize();
+        boolean freshDb = !Files.exists(dbFile);
         try {
             Path parent = dbFile.getParent();
             if (parent != null) Files.createDirectories(parent);
@@ -129,10 +138,18 @@ public final class Main {
             fail("could not apply migrations: " + e.getMessage());
             return;
         }
+        try {
+            if (Seeds.apply(root, dbFile, freshDb, diagnostics) > 0) {
+                System.out.println("why: applied seed.sql to the fresh development database");
+            }
+        } catch (RuntimeException | IOException e) {
+            fail("could not apply seed.sql: " + e.getMessage());
+            return;
+        }
 
         Site site = new Site(root, dbFile);
         try {
-            WhyServer server = new WhyServer(site, host, port, diagnostics, secureCookies);
+            WhyServer server = new WhyServer(site, host, port, diagnostics, secureCookies, trustProxy);
             server.start();
             String shownHost = server.address().getAddress().isLoopbackAddress() ? "localhost" : host;
             System.out.println("Why is serving " + root + " at http://" + shownHost + ":" + server.port());
@@ -153,6 +170,40 @@ public final class Main {
         return args[index];
     }
 
+    private static String env(String name, String fallback) {
+        String value = System.getenv(name);
+        return value == null || value.isBlank() ? fallback : value.strip();
+    }
+
+    private static int envPort(int fallback) {
+        String value = System.getenv("PORT");
+        if (value == null || value.isBlank()) return fallback;
+        try {
+            return Integer.parseInt(value.strip());
+        } catch (NumberFormatException e) {
+            fail("PORT must be a number, got '" + value + "'");
+            return fallback;
+        }
+    }
+
+    private static Path envDb() {
+        String value = System.getenv("WHY_DB");
+        return value == null || value.isBlank() ? null : Path.of(value.strip());
+    }
+
+    private static boolean envFlag(String name) {
+        String value = System.getenv(name);
+        if (value == null || value.isBlank()) return false;
+        return switch (value.strip().toLowerCase(java.util.Locale.ROOT)) {
+            case "1", "true", "yes", "on" -> true;
+            case "0", "false", "no", "off" -> false;
+            default -> {
+                fail(name + " must be true or false, got '" + value + "'");
+                yield false;
+            }
+        };
+    }
+
     private static void fail(String message) {
         System.err.println("why: " + message);
         System.exit(1);
@@ -170,9 +221,14 @@ public final class Main {
                   -p, --port PORT   port to listen on (default: 8080)
                       --host HOST   interface to bind (default: 127.0.0.1; use 0.0.0.0 to expose)
                       --db FILE     SQLite database file (default: <site>/data.db)
-                      --dev         show source, SQL errors and stack traces in 500 pages
+                      --dev         show source, SQL errors and stack traces in 500 pages;
+                                    applies seed.sql when the database is fresh
                       --secure-cookies  mark session cookies Secure (use with TLS)
+                      --trust-proxy trust X-Forwarded-Proto: https from a loopback proxy
                   -h, --help        show this help
+
+                Environment: PORT, HOST, WHY_DB and WHY_SECURE_COOKIES supply the defaults
+                for --port, --host, --db and --secure-cookies.
 
                 Drop a .why file in the site folder and it is served at its path.
                 """);

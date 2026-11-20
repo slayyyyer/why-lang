@@ -8,6 +8,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -54,6 +55,7 @@ public final class WhyServer {
     private final HttpServer server;
     private final boolean diagnostics;
     private final boolean secureCookies;
+    private final boolean trustProxy;
     private final long requestTimeoutMillis;
     private final Semaphore requestSlots = new Semaphore(MAX_CONCURRENT_REQUESTS);
     private final ExecutorService executor;
@@ -70,17 +72,29 @@ public final class WhyServer {
 
     public WhyServer(Site site, String host, int port, boolean diagnostics, boolean secureCookies)
             throws IOException {
-        this(site, host, port, diagnostics, secureCookies, REQUEST_TIMEOUT_MILLIS);
+        this(site, host, port, diagnostics, secureCookies, false, REQUEST_TIMEOUT_MILLIS);
+    }
+
+    /** A server that may trust {@code X-Forwarded-Proto: https} from a loopback proxy. */
+    public WhyServer(Site site, String host, int port, boolean diagnostics, boolean secureCookies,
+            boolean trustProxy) throws IOException {
+        this(site, host, port, diagnostics, secureCookies, trustProxy, REQUEST_TIMEOUT_MILLIS);
     }
 
     /** Package-private so tests can exercise the timeout quickly. */
     WhyServer(Site site, String host, int port, boolean diagnostics, boolean secureCookies,
             long requestTimeoutMillis) throws IOException {
+        this(site, host, port, diagnostics, secureCookies, false, requestTimeoutMillis);
+    }
+
+    WhyServer(Site site, String host, int port, boolean diagnostics, boolean secureCookies,
+            boolean trustProxy, long requestTimeoutMillis) throws IOException {
         this.site = site;
         this.compiler = new PageCompiler(site);
         this.server = HttpServer.create(new InetSocketAddress(host, port), 0);
         this.diagnostics = diagnostics;
         this.secureCookies = secureCookies;
+        this.trustProxy = trustProxy;
         this.requestTimeoutMillis = requestTimeoutMillis;
         this.timeouts = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "why-request-timeout");
@@ -360,7 +374,7 @@ public final class WhyServer {
         if (!csrf.shouldSetCookie()) return;
         StringBuilder cookie = new StringBuilder("why_csrf=").append(csrf.token())
                 .append("; Path=/; HttpOnly; SameSite=Lax");
-        if (secureCookies || exchange instanceof HttpsExchange) cookie.append("; Secure");
+        if (secureCookie(exchange)) cookie.append("; Secure");
         exchange.getResponseHeaders().add("Set-Cookie", cookie.toString());
     }
 
@@ -380,7 +394,7 @@ public final class WhyServer {
     private void setSessionCookie(HttpExchange exchange, String id) {
         StringBuilder cookie = new StringBuilder("why_session=").append(id)
                 .append("; Path=/; HttpOnly; SameSite=Lax");
-        if (secureCookies || exchange instanceof HttpsExchange) cookie.append("; Secure");
+        if (secureCookie(exchange)) cookie.append("; Secure");
         exchange.getResponseHeaders().add("Set-Cookie", cookie.toString());
     }
 
@@ -409,8 +423,28 @@ public final class WhyServer {
             cookie = "why_sid=" + active + "; Path=/; HttpOnly; SameSite=Lax; Max-Age="
                     + SessionStore.TTL_SECONDS;
         }
-        if (secureCookies || exchange instanceof HttpsExchange) cookie += "; Secure";
+        if (secureCookie(exchange)) cookie += "; Secure";
         exchange.getResponseHeaders().add("Set-Cookie", cookie);
+    }
+
+    /**
+     * Whether a cookie must be marked Secure: always behind TLS, otherwise only when a loopback
+     * proxy says the original request was HTTPS and the operator opted into trusting it.
+     */
+    private boolean secureCookie(HttpExchange exchange) {
+        if (secureCookies || exchange instanceof HttpsExchange) return true;
+        if (!trustProxy || !isLoopback(exchange)) return false;
+        String forwarded = exchange.getRequestHeaders().getFirst("X-Forwarded-Proto");
+        if (forwarded == null) return false;
+        int comma = forwarded.indexOf(',');
+        String proto = (comma < 0 ? forwarded : forwarded.substring(0, comma)).strip();
+        return proto.equalsIgnoreCase("https");
+    }
+
+    private static boolean isLoopback(HttpExchange exchange) {
+        InetSocketAddress remote = exchange.getRemoteAddress();
+        InetAddress address = remote == null ? null : remote.getAddress();
+        return address != null && address.isLoopbackAddress();
     }
 
     private int serveStatic(HttpExchange exchange, Path file) throws IOException {
