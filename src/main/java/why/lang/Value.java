@@ -30,6 +30,7 @@ public final class Value {
         if (v instanceof Map) return "hash";
         if (v instanceof Db) return "db";
         if (v instanceof Sql) return "sql";
+        if (v instanceof Upload) return "upload";
         return v.getClass().getSimpleName();
     }
 

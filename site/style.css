@@ -160,6 +160,12 @@ button:hover {
   border-left: 3px solid #c2410c;
 }
 
+img.upload {
+  max-width: 20rem;
+  height: auto;
+  border: 1px solid #cfc5b4;
+}
+
 ul.guestbook {
   padding: 0;
   list-style: none;

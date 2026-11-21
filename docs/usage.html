@@ -38,6 +38,7 @@
         <a href="#database">The database</a>
         <a href="#responses">Responses and flash</a>
         <a href="#forms">Forms</a>
+        <a href="#uploads">File uploads</a>
         <a href="#not-yet">Not yet</a>
         <a href="#cli">The command line</a>
         <a href="#errors">Errors</a>
@@ -177,8 +178,9 @@ end</code></pre></div>
             <thead><tr><th>Global</th><th>What it is</th></tr></thead>
             <tbody>
               <tr><td><code>params</code></td><td>Query parameters as strings. <code>/post?id=3</code> gives <code>params.id == "3"</code>.</td></tr>
-              <tr><td><code>form</code></td><td>Fields from an <code>application/x-www-form-urlencoded</code> POST body, empty on GET. Bodies are capped at 64 KiB; multipart is not read.</td></tr>
-              <tr><td><code>request</code></td><td>A hash with <code>method</code>, <code>path</code>, <code>query</code>, <code>params</code> and <code>form</code>.</td></tr>
+              <tr><td><code>form</code></td><td>Fields from a POST body: <code>application/x-www-form-urlencoded</code>, or the text parts of a <code>multipart/form-data</code> form. Empty on GET. Bodies are capped at 64 KiB, or 4 MiB for multipart.</td></tr>
+              <tr><td><code>files</code></td><td>Uploaded files from a <code>multipart/form-data</code> POST, keyed by field name. Empty elsewhere; an untouched file input is <code>nil</code>, not an empty file.</td></tr>
+              <tr><td><code>request</code></td><td>A hash with <code>method</code>, <code>path</code>, <code>query</code>, <code>params</code>, <code>form</code> and <code>files</code>.</td></tr>
               <tr><td><code>flash</code></td><td>One-shot messages carried to the next page request. <code>flash.set("notice", "…")</code>; read with <code>{{flash.notice}}</code> or <code>flash.get("notice")</code>.</td></tr>
               <tr><td><code>csrf</code></td><td><code>csrf.token</code>, a per-browser secret for form posts. It rides an HttpOnly <code>why_csrf</code> cookie, so it survives a restart and needs no server-side state. A POST without the matching <code>_token</code> field is rejected with 403.</td></tr>
               <tr><td><code>session</code></td><td>Small server-side values for this browser, stored in <code>why_sessions</code> and named by the HttpOnly <code>why_sid</code> cookie. <code>session.get</code>, <code>session.set</code>, <code>session.clear</code> and <code>session.rotate</code>; see below.</td></tr>
@@ -260,6 +262,30 @@ end
           <li>Errors answer 500; <code>--dev</code> adds the diagnostic page with source and SQL details.</li>
         </ul>
 
+        <h3 id="uploads">File uploads</h3>
+        <p>A form with <code>enctype="multipart/form-data"</code> fills <code>files</code> as well as <code>form</code>, so an upload needs no handler of its own:</p>
+        <div class="code"><div class="code-title">site/avatar.why</div><pre><code># controller
+picture = files.avatar
+if request.method == "POST" and picture
+  name = picture.save("uploads")
+  db.exec("update people set avatar = ? where id = ?", "/uploads/" + name, 1)
+  redirect("/profile")
+end
+
+# view
+&lt;form method="post" enctype="multipart/form-data"&gt;
+  &lt;input type="hidden" name="_token" value="{{csrf.token}}"&gt;
+  &lt;input type="file" name="avatar" accept="image/*"&gt;
+  &lt;button&gt;Save&lt;/button&gt;
+&lt;/form&gt;</code></pre></div>
+        <ul>
+          <li><code>files.avatar</code> is the upload, or <code>nil</code> when the input was left empty, so <code>if files.avatar</code> is the presence check.</li>
+          <li>An upload answers <code>filename</code> (the submitted name, without a directory), <code>type</code> (the part's content type), <code>size</code> (bytes) and <code>text</code> (the bytes decoded as UTF-8, for text files).</li>
+          <li><code>save(folder)</code> writes the bytes under the site folder, creating the folder, and returns the random name it chose (the original extension is kept). Folders are relative to the site: an absolute path, or anything whose real location leaves it — through <code>..</code> or a link — is rejected.</li>
+          <li>The saved file is served like any static file at <code>/uploads/&lt;name&gt;</code>, so keep an extension the site allowlist accepts (images, <code>txt</code>, <code>json</code>, <code>svg</code>).</li>
+          <li>A multipart body is capped at 4 MiB and 32 parts; a text field submitted with a file still lands in <code>form</code>.</li>
+        </ul>
+
         <h2 id="not-yet">Not yet</h2>
         <p>These are deliberate gaps in the current proof of concept, not hidden behavior:</p>
         <ul>
@@ -267,7 +293,6 @@ end
           <li><strong>A cookies API.</strong> The <code>why_session</code> cookie is internal to flash; pages cannot read or set cookies.</li>
           <li><strong><code>env</code> and <code>log</code> helpers.</strong> Neither exists.</li>
           <li><strong>Cookies beyond the two the server issues.</strong> Pages cannot read or set arbitrary cookies.</li>
-          <li><strong>Multipart forms or uploads.</strong> Only <code>application/x-www-form-urlencoded</code> bodies are read.</li>
         </ul>
         <p>Custom block helpers are also not supported yet; see <a href="#views">Views</a>.</p>
 

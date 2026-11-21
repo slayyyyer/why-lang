@@ -436,6 +436,18 @@ public final class Interpreter {
             }
         }
 
+        if (receiver instanceof Upload upload) {
+            return switch (name) {
+                case "filename" -> upload.filename();
+                case "type" -> upload.contentType();
+                case "size" -> upload.size();
+                case "text" -> upload.text();
+                case "save" -> upload.save(Value.str(first), line);
+                default -> throw new WhyError(
+                        "upload has no method '" + name
+                                + "' (try filename, type, size, text or save)", null, line);
+            };
+        }
         if (receiver instanceof List<?> raw) {
             @SuppressWarnings("unchecked")
             List<Object> list = (List<Object>) raw;
