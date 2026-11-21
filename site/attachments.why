@@ -1,0 +1,46 @@
+imports:
+header
+footer
+
+controller:
+title = "Attachments"
+attachment = files.attachment
+error = ""
+url = ""
+if request.method == "POST"
+  if attachment
+    if attachment.size > 1048576
+      error = "That file is larger than 1 MB. Pick something smaller."
+    else
+      url = "/uploads/" + attachment.save("uploads")
+    end
+  else
+    error = "Choose a file first."
+  end
+end
+
+view:
+{{> header}}
+<h1>Attachments</h1>
+<p>A file input fills <code>files.attachment</code>. <code>save</code> writes it under
+<code>site/uploads/</code>, creating the folder on the first upload, and returns the name it
+chose.</p>
+{{#if error}}<p class="error">{{error}}</p>{{/if}}
+{{#if url}}
+<div class="note">
+  <p>Saved <strong>{{attachment.filename}}</strong>
+    ({{attachment.size}} bytes, {{attachment.type}}).</p>
+  <p><a href="{{url}}">{{url}}</a></p>
+  {{#if attachment.type.start_with?("image/")}}
+  <p><img class="upload" src="{{url}}" alt="{{attachment.filename}}"></p>
+  {{/if}}
+</div>
+{{/if}}
+<form class="sign" method="post" action="/attachments" enctype="multipart/form-data">
+  <input type="hidden" name="_token" value="{{csrf.token}}">
+  <label>File
+    <input type="file" name="attachment">
+  </label>
+  <button type="submit">Upload</button>
+</form>
+{{> footer}}

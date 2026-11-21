@@ -430,9 +430,12 @@ added to a database created by `schema.sql` should therefore be written against 
 ## Request globals
 
 - `params` — query parameters as strings, e.g. `/post?id=3` gives `params.id == "3"`.
-- `form` — POSTed form fields as strings, empty on GET. Only `application/x-www-form-urlencoded`
-  bodies are read (64 KiB cap).
-- `request` — a hash with `method`, `path`, `query`, `params` and `form`.
+- `form` — POSTed form fields as strings, empty on GET. Urlencoded bodies, or the text parts of a
+  `multipart/form-data` form, are read (64 KiB cap, or 4 MiB for multipart).
+- `files` — uploads from a `multipart/form-data` form, keyed by field name, empty elsewhere. An
+  untouched file input is `nil`; an upload answers `filename`, `type`, `size`, `text` and
+  `save(folder)`, which writes under the site and returns the name it chose.
+- `request` — a hash with `method`, `path`, `query`, `params`, `form` and `files`.
 - `flash` — one-shot messages. `flash.set("notice", "…")` stores a value for the next page
   request, where `{{flash.notice}}` can read it; the request after that no longer has it. Messages
   live in a bounded, expiring in-memory store keyed by a server-issued `why_session` cookie;

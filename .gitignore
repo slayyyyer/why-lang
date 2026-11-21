@@ -4,6 +4,7 @@ build/
 .tools/
 *.db
 *.db-journal
+site/uploads/
 .idea/
 *.iml
 docs/api/

@@ -30,6 +30,7 @@ import why.lang.Csrf;
 import why.lang.Db;
 import why.lang.ExecutionBudget;
 import why.lang.Flash;
+import why.lang.Multipart;
 import why.lang.Redirect;
 import why.lang.Response;
 import why.util.Html;
@@ -145,7 +146,7 @@ public final class WhyServer {
                 sendText(exchange, 431, "Request Header Fields Too Large");
                 return;
             }
-            int contentLengthStatus = contentLengthStatus(exchange);
+            int contentLengthStatus = contentLengthStatus(exchange, bodyLimit(exchange));
             if (contentLengthStatus != 0) {
                 status = contentLengthStatus;
                 sendText(exchange, status, status == 413 ? "Payload Too Large" : "Bad Request");
@@ -179,6 +180,13 @@ public final class WhyServer {
                 sendText(exchange, 405, "Method Not Allowed");
             } else {
                 status = serveStatic(exchange, file);
+            }
+        } catch (BadRequest e) {
+            status = 400;
+            try {
+                sendText(exchange, 400, "Bad Request");
+            } catch (IOException ignored) {
+                // The response may already be committed; nothing else to send.
             }
         } catch (BodyTooLarge e) {
             status = 413;
@@ -230,16 +238,25 @@ public final class WhyServer {
     }
 
     /** 0 when acceptable, otherwise the response status for Content-Length. */
-    private static int contentLengthStatus(HttpExchange exchange) {
+    private static int contentLengthStatus(HttpExchange exchange, int limit) {
         String raw = exchange.getRequestHeaders().getFirst("Content-Length");
         if (raw == null) return 0;
         try {
             long length = Long.parseLong(raw.strip());
             if (length < 0) return 400;
-            return length > MAX_BODY_BYTES ? 413 : 0;
+            return length > limit ? 413 : 0;
         } catch (NumberFormatException e) {
             return 400;
         }
+    }
+
+    /** The body cap for this request: a multipart upload gets more room than a plain form. */
+    private static int bodyLimit(HttpExchange exchange) {
+        String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+        return contentType != null
+                && contentType.toLowerCase(Locale.ROOT).startsWith("multipart/form-data")
+                        ? AllocationLimits.UPLOAD_BYTES
+                        : MAX_BODY_BYTES;
     }
 
     private static int utf8Length(String text) {
@@ -259,7 +276,8 @@ public final class WhyServer {
         }
         Flash flash = new Flash(carried);
         Response page = new Response();
-        Map<Object, Object> fields = form(exchange);
+        RequestData body = readRequest(exchange);
+        Map<Object, Object> fields = body.fields();
         String csrfValue = cookie(exchange, "why_csrf");
         boolean hasToken = Csrf.valid(csrfValue);
         Csrf csrf = new Csrf(hasToken ? csrfValue : Csrf.newToken(), !hasToken);
@@ -271,7 +289,7 @@ public final class WhyServer {
         String html;
         try {
             Program program = compiler.compile(file);
-            Map<String, Object> globals = globals(exchange, flash, csrf, fields);
+            Map<String, Object> globals = globals(exchange, flash, csrf, fields, body.files());
             globals.put("response", page);
             try (Db db = new Db(site.dbFile())) {
                 globals.put("db", db);
@@ -399,7 +417,7 @@ public final class WhyServer {
     }
 
     private Map<String, Object> globals(HttpExchange exchange, Flash flash, Csrf csrf,
-            Map<Object, Object> form) {
+            Map<Object, Object> form, Map<Object, Object> files) {
         Map<Object, Object> params = new LinkedHashMap<>();
         String rawQuery = exchange.getRequestURI().getRawQuery();
         if (rawQuery != null && !rawQuery.isEmpty()) parseUrlEncoded(rawQuery, params);
@@ -410,39 +428,67 @@ public final class WhyServer {
         request.put("query", rawQuery == null ? "" : rawQuery);
         request.put("params", params);
         request.put("form", form);
+        request.put("files", files);
 
         Map<String, Object> globals = new LinkedHashMap<>();
         globals.put("request", request);
         globals.put("params", params);
         globals.put("form", form);
+        globals.put("files", files);
         globals.put("flash", flash);
         globals.put("csrf", csrf);
         return globals;
     }
 
-    /** POSTed urlencoded fields; empty on GET or other content types. */
-    private Map<Object, Object> form(HttpExchange exchange) {
+    /**
+     * POSTed fields and files: urlencoded fields, or the text parts and uploads of a multipart
+     * form. Empty on GET and on other content types.
+     */
+    private RequestData readRequest(HttpExchange exchange) {
         Map<Object, Object> fields = new LinkedHashMap<>();
-        if (!exchange.getRequestMethod().equals("POST")) return fields;
+        Map<Object, Object> files = new LinkedHashMap<>();
+        if (!exchange.getRequestMethod().equals("POST")) return new RequestData(fields, files);
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
-        if (contentType != null
-                && !contentType.toLowerCase(Locale.ROOT).startsWith("application/x-www-form-urlencoded")) {
-            return fields;
-        }
+        String type = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
+        boolean urlencoded = type.startsWith("application/x-www-form-urlencoded");
+        boolean multipart = type.startsWith("multipart/form-data");
+        if (!urlencoded && !multipart) return new RequestData(fields, files);
         try {
-            byte[] body = exchange.getRequestBody().readNBytes(MAX_BODY_BYTES + 1);
-            if (body.length > MAX_BODY_BYTES) throw new BodyTooLarge();
-            parseUrlEncoded(new String(body, StandardCharsets.UTF_8), fields);
+            int limit = multipart ? AllocationLimits.UPLOAD_BYTES : MAX_BODY_BYTES;
+            byte[] body = exchange.getRequestBody().readNBytes(limit + 1);
+            if (body.length > limit) throw new BodyTooLarge();
+            if (urlencoded) {
+                parseUrlEncoded(new String(body, StandardCharsets.UTF_8), fields);
+            } else {
+                Multipart.Result parsed;
+                try {
+                    parsed = Multipart.parse(body, contentType, site.root());
+                } catch (IllegalArgumentException e) {
+                    throw new BadRequest();
+                }
+                fields.putAll(parsed.fields());
+                files.putAll(parsed.files());
+            }
         } catch (IOException e) {
             if (Thread.currentThread().isInterrupted()) throw new RequestTimeout();
             throw new WhyError("cannot read the request body: " + e.getMessage());
         }
-        return fields;
+        return new RequestData(fields, files);
     }
+
+    /** The decoded body of one request: form fields and, for multipart, uploaded files. */
+    private record RequestData(Map<Object, Object> fields, Map<Object, Object> files) {}
 
     /** Internal signal for a body that exceeded the hard request limit. */
     private static final class BodyTooLarge extends RuntimeException {
         BodyTooLarge() {
+            super(null, null, false, false);
+        }
+    }
+
+    /** Internal signal for a body the server could not parse. */
+    private static final class BadRequest extends RuntimeException {
+        BadRequest() {
             super(null, null, false, false);
         }
     }

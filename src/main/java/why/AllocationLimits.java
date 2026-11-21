@@ -14,6 +14,12 @@ public final class AllocationLimits {
     /** Maximum UTF-8 size of one flash value. */
     public static final int FLASH_VALUE_BYTES = 4 * 1024;
 
+    /** Maximum size of one multipart POST body, and so of each uploaded file. */
+    public static final int UPLOAD_BYTES = 4 * 1024 * 1024;
+
+    /** Maximum number of parts, fields and files together, in one multipart body. */
+    public static final int UPLOAD_PARTS = 32;
+
     /** Maximum size of a page file, including imported pages. */
     public static final long PAGE_BYTES = 256 * 1024;
 
