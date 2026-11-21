@@ -52,13 +52,24 @@ a POST form, a bound `db.exec` insert, and a redirect back. Written while buildi
    natural place to put one.
 
 9. **POST plumbing is hardwired into the server.**
-   Only `application/x-www-form-urlencoded`, read up to 64 KiB, parsed into `form`. JSON bodies,
-   multipart, uploads and request hooks would each change `WhyServer`; pages cannot intercept a
-   request.
+   Only `application/x-www-form-urlencoded`, read up to 64 KiB, parsed into `form`; pages cannot
+   intercept a request, so each body shape is a `WhyServer` change.
+   *(Addressed after M2: multipart bodies now fill `files` and `upload.save(folder)` writes under
+   the site, which confirmed the diagnosis — the feature is a server change, not a page one. The
+   upload work exposed its own friction. The parser is hand-rolled because the JDK has none; it
+   holds the whole body in memory, so the 4 MiB cap is a memory budget rather than a stream; and
+   it runs before the CSRF check, so an unauthenticated upload is still read and parsed in full.
+   `Upload` carries `site.root()` to prove `save` stays inside the site, which leaves
+   jar-packaged sites unable to save, and the parser turns the empty filename of an untouched
+   `<input type="file">` into `nil` by convention. JSON bodies and request hooks still need
+   `WhyServer`.)*
 
 10. **No CSRF, spam, or rate-limit story.**
     Any POST from anywhere is accepted. That is fine for a local demo and a decision for a public
     one; the page has one natural place (`form`) and no token mechanism to put in it.
+    *(Addressed after M2 for CSRF: `csrf.token` now rides an HttpOnly `why_csrf` cookie, and a
+    POST without the matching `_token` field is rejected with 403 before the page runs. Spam and
+    rate limits are still out; request slots and a timeout bound concurrency, not request rate.)*
 
 11. **Redirect targets are hand-built strings.**
     `/guestbook?posted=1` is a literal. There is no URL/query helper, so a redirect carrying user
